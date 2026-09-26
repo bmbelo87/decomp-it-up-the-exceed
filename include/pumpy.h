@@ -110,6 +110,8 @@ typedef enum {
     STATE_SONG_TITLE      = 0x83,
     STATE_SONG_TITLE_OUT  = 0x84,
     STATE_GAMEPLAY_BEGIN  = 0x85,
+    STATE_INTRO           = 0x90, /* Exceed: CIntro — BGA\INTRO.MOV + AUDIO\001.AUD */
+    STATE_CREDIT          = 0x91, /* Exceed: CTitle — CREDIT.MOV */
     STATE_EXIT            = 0xFF,
 } GameState;
 
@@ -613,6 +615,8 @@ bool Loading_IsActive(void);
 
 void Gamestate_UpdateWarning(float dt);
 void Gamestate_UpdateLogo(float dt);
+void Gamestate_UpdateIntro(float dt);
+void Gamestate_RenderIntro(void);
 void Gamestate_UpdateMenu(float dt);
 extern bool g_cdLoaded;
 void Gamestate_UpdateSongSelect(float dt);
@@ -668,6 +672,7 @@ bool RES_Read(int index, uint8_t* buffer);
 uint8_t* RES_ReadAlloc(int index);
 void RES_Close(void);
 bool RES_IsOpen(void);
+void RESPACK_DeriveKey16(const uint8_t* in, uint8_t* out); /* exceed.exe 0x411DBC */
 
 void* Resource_Load(int resId, const char* type, DWORD* outSize);
 int Resource_LoadWave(int resId, const char* name);

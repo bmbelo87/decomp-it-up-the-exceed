@@ -44,7 +44,9 @@ static void LoadBGAForState(GameState state) {
     const char* bgaName = NULL;
     switch (state) {
     case STATE_WARNING_INIT:
-    case STATE_WARNING_ANIM: bgaName = "R_WARN"; break;
+    case STATE_WARNING_ANIM: bgaName = "R_WARN_A"; break; /* Exceed: BGA\R_WARN_A.DAT */
+    case STATE_INTRO:
+    case STATE_CREDIT:       bgaName = ""; break;       /* vídeo, sem BGA */
     case STATE_LOGO_ENTER:   bgaName = "81"; break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
@@ -226,7 +228,7 @@ void Game_Init(HINSTANCE hInstance) {
         Log_Print("WARNING: Failed to load song database from '%s'\n", cfgPath);
     }
 
-    Game_ChangeState(STATE_LOGO_ENTER);
+    Game_ChangeState(STATE_WARNING_INIT); /* Exceed: R_WARN_A -> 81 -> INTRO -> CREDIT */
     g_game.lastTime = timeGetTime();
 }
 
@@ -284,17 +286,26 @@ void Game_Update(float dt) {
 
     if (Input_IsKeyHit(VK_ESCAPE)) {
         GameState s = g_game.state;
+        /* Consome a borda do ESC (mesmo motivo do F1 acima): os returns abaixo
+         * pulam o memcpy do fim de Game_Update e o ESC seria lido de novo no
+         * frame seguinte, pulando duas cenas (WARN -> LOGO -> MENU). */
+        memcpy(g_game.input.prevKeys, g_game.input.keys, sizeof(g_game.input.keys));
+
+        /* Exceed: ESC no CREDIT não faz nada (já é o destino do ESC) */
+        if (s == STATE_CREDIT) return;
+
         BGM_Stop();
         Menu_ResetState();
         memset(g_game.input.padPrevState, 0, sizeof(g_game.input.padPrevState));
 
+        /* Exceed: WARN -> LOGO -> CREDIT; o resto vai para o CREDIT */
         if (s == STATE_WARNING_INIT || s == STATE_WARNING_ANIM || s == STATE_WARNING_END) {
             Game_ChangeState(STATE_LOGO_ENTER);
             return;
         }
 
         if (s == STATE_STAFF || s == STATE_STAFF_ENTER) {
-            Game_ChangeState(STATE_MENU_ENTER);
+            Game_ChangeState(STATE_CREDIT);
             return;
         }
 
@@ -310,12 +321,12 @@ void Game_Update(float dt) {
         if (s == STATE_GAMEPLAY || s == STATE_GAME_INIT) {
             Game_ResetAllCheats(); /* ESC durante gameplay: zera todos os cheats */
             Resource_ClearBGA();
-            Game_ChangeState(STATE_MENU_ENTER);
+            Game_ChangeState(STATE_CREDIT);
             return;
         }
 
         Resource_ClearBGA();
-        Game_ChangeState(STATE_MENU_ENTER);
+        Game_ChangeState(STATE_CREDIT);
     }
 
     g_game.stateFrame++;
@@ -369,6 +380,10 @@ void Game_Update(float dt) {
     case STATE_LOGO_UPDATE:
     case STATE_LOGO_SKIP:
         Gamestate_UpdateLogo(dt);
+        break;
+    case STATE_INTRO:
+    case STATE_CREDIT:
+        Gamestate_UpdateIntro(dt);
         break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
@@ -636,6 +651,10 @@ void Game_Render(void) {
     }
 
     switch (g_game.state) {
+        case STATE_INTRO:
+        case STATE_CREDIT:
+            Gamestate_RenderIntro();
+            break;
         case STATE_MENU_ENTER:
         case STATE_MENU_INPUT:
         case STATE_EXIT:

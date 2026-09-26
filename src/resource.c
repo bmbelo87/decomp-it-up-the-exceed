@@ -1,6 +1,7 @@
 #include "pumpy.h"
 #include "vsl.h"
 #include "df_resource.h"
+#include "zlibinflate.h"
 
 #if !defined(_WIN32)
 #include <dirent.h>
@@ -23,6 +24,7 @@ typedef struct {
     uint32_t fileSize;
     int fileCount;
     RESEntry* entries;
+    int isPack;          /* RESPACK (Exceed): data já decifrado e descomprimido */
 } RESArchive;
 
 static RESArchive* g_resArchive = NULL;
@@ -33,6 +35,139 @@ static void res_xor_decrypt(uint8_t* data, uint32_t size) {
         data[i] ^= key;
         key = (uint8_t)(key + RES_KEY_STEP);
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * RESPACK — BGA\*.DAT do Exceed (exceed.exe).
+ *   0x00 "RESPACK\x1A", 0x0C u32 entradas; índice em 0x18 (0x28 se o DWORD em
+ *   0x18 for zero), entradas de 0x12C bytes, XOR 0x5C + 0xC1 por byte.
+ *   entrada: +0x000 nome, +0x10C tamanho real, +0x110 tamanho comprimido,
+ *            +0x118 chave (16 bytes), +0x128 offset.
+ *   dados em header + n*0x12C + offset + 0x118 -> chave derivada (0x411DBC),
+ *   XOR (0x423234) e zlib.
+ * ------------------------------------------------------------------------- */
+#define RESPACK_MAGIC   "RESPACK\x1A"
+#define RESPACK_ENTRY   0x12C
+
+static const uint8_t g_packT0[8] = { 0xF0,0x78,0xF9,0xFD,0x1C,0x20,0xC2,0x02 }; /* 0x411dc4 */
+static const uint8_t g_packT1[8] = { 0xFF,0xFE,0xFC,0xF8,0xF0,0xE0,0xC0,0x7F }; /* 0x411f94 */
+static uint8_t g_packState;                                                     /* 0x1284ab0 */
+
+/* 0x411df3 */
+static uint8_t pack_f(uint8_t c, uint8_t s) {
+    if (c == 0) return g_packT0[s & 7];
+    uint8_t a = pack_f((uint8_t)((c - 1) & 7), (uint8_t)((s - 1) & 7));
+    uint8_t r = (uint8_t)((a << 1) | (((a >> 7) ^ (a >> 6)) & 1));
+    if (s == 7) r ^= pack_f(c, 0);
+    return r;
+}
+
+/* 0x411dcc */
+static void pack_step0(void) {
+    uint8_t dl = 0;
+    for (int b = 0; b < 8; b++)
+        if ((g_packState >> b) & 1) dl ^= g_packT1[b];
+    g_packState = dl;
+}
+
+/* 0x411e67 */
+static void pack_stepk(uint8_t k) {
+    uint8_t r = 0;
+    for (int b = 0; b < 8; b++)
+        if ((g_packState >> b) & 1) r ^= pack_f(k, (uint8_t)b);
+    g_packState = r;
+}
+
+/* 0x411ead */
+static uint8_t pack_h(uint8_t x) {
+    uint8_t r = 0;
+    for (int c = 0; c < 8; c++) {
+        if (c == 0) pack_step0();
+        r ^= (uint8_t)(((g_packState >> c) & 1) << c);
+        if (!((x >> c) & 1)) pack_stepk((uint8_t)c);
+    }
+    return r;
+}
+
+/* 0x411dbc -> 0x411f06 */
+static void pack_derive_key(int n, const uint8_t* in, uint8_t* out) {
+    g_packState = 0xFC;
+    uint8_t prev = pack_h((uint8_t)~in[0]);
+    for (int i = 1; i < n; i++) {
+        uint8_t a = pack_h((uint8_t)~in[i]);
+        out[i - 1] = (uint8_t)((prev >> 3) | (a << 5));
+        prev = a;
+    }
+    uint8_t a = pack_h(0);
+    out[n - 1] = (uint8_t)((a << 5) | (prev >> 3));
+}
+
+/* 0x411dbc com 16 bytes — usado também pelo ENC2 dos .AUD (audio.c) */
+void RESPACK_DeriveKey16(const uint8_t* in, uint8_t* out) {
+    pack_derive_key(16, in, out);
+}
+
+/* 0x423234 */
+static void pack_decrypt(uint8_t* data, uint32_t len, const uint8_t* key16) {
+    uint8_t k[16];
+    pack_derive_key(16, key16, k);
+    for (uint32_t i = 0; i < len; i++) {
+        data[i] ^= k[i & 15];
+        k[i & 15] = (uint8_t)(k[i & 15] + 0x54);
+    }
+}
+
+/* Decifra e descomprime todas as entradas; res->data passa a ser o bloco
+ * descomprimido e entries[].offset/size apontam dentro dele. */
+static bool respack_load(RESArchive* res) {
+    uint8_t* d = res->data;
+    int n = (int)*(uint32_t*)(d + 0x0C);
+    uint32_t hdr = (*(uint32_t*)(d + 0x18) == 0) ? 0x28 : 0x18;
+    uint32_t idxSize = (uint32_t)n * RESPACK_ENTRY;
+    if (n <= 0 || hdr + idxSize > res->fileSize) return false;
+
+    uint8_t* idx = (uint8_t*)malloc(idxSize);
+    if (!idx) return false;
+    for (uint32_t i = 0; i < idxSize; i++)
+        idx[i] = d[hdr + i] ^ (uint8_t)(0x5C + 0xC1 * i);
+
+    res->fileCount = n;
+    res->entries = (RESEntry*)calloc(n, sizeof(RESEntry));
+    uint32_t total = 0;
+    for (int e = 0; e < n; e++) total += *(uint32_t*)(idx + e * RESPACK_ENTRY + 0x10C);
+    uint8_t* out = (uint8_t*)malloc(total ? total : 1);
+    if (!res->entries || !out) { free(idx); free(out); return false; }
+
+    uint32_t base = hdr + idxSize + 0x118, pos = 0;
+    for (int e = 0; e < n; e++) {
+        uint8_t* ent = idx + e * RESPACK_ENTRY;
+        uint32_t rawSize = *(uint32_t*)(ent + 0x10C);
+        uint32_t cSize   = *(uint32_t*)(ent + 0x110);
+        uint32_t off     = *(uint32_t*)(ent + 0x128);
+        strncpy(res->entries[e].name, (const char*)ent, sizeof(res->entries[e].name) - 1);
+        if (base + off + cSize > res->fileSize) { free(idx); free(out); return false; }
+
+        uint8_t* blob = (uint8_t*)malloc(cSize ? cSize : 1);
+        if (!blob) { free(idx); free(out); return false; }
+        memcpy(blob, d + base + off, cSize);
+        pack_decrypt(blob, cSize, ent + 0x118);
+        uint32_t got = rawSize;
+        int zr = zlib_decompress(blob, cSize, out + pos, &got);
+        free(blob);
+        if (zr != 0 || got != rawSize) {
+            Log_Print("RESPACK: falha ao descomprimir '%s' (zlib=%d)\n", res->entries[e].name, zr);
+            free(idx); free(out); return false;
+        }
+        res->entries[e].offset = pos;
+        res->entries[e].size = rawSize;
+        pos += rawSize;
+    }
+    free(idx);
+    free(res->data);
+    res->data = out;
+    res->fileSize = total;
+    res->isPack = 1;
+    return true;
 }
 
 static int res_find_by_name(RESArchive* res, const char* name) {
@@ -106,6 +241,16 @@ bool RES_Open(const char* path) {
     }
     fclose(f);
 
+    if (res->fileSize >= 0x28 && memcmp(res->data, RESPACK_MAGIC, 8) == 0) {
+        if (!respack_load(res)) {
+            Log_Print("RESPACK: falha ao abrir '%s'\n", path);
+            free(res->data); free(res->entries); free(res); return false;
+        }
+        g_resArchive = res;
+        Log_Print("RESPACK: opened '%s' (%d files, %u bytes)\n", path, res->fileCount, res->fileSize);
+        return true;
+    }
+
     if (memcmp(res->data, RES_MAGIC, 4) != 0) {
         Log_Print("RES: invalid magic in '%s'\n", path);
         free(res->data); free(res); return false;
@@ -158,7 +303,7 @@ bool RES_Read(int index, uint8_t* buffer) {
     RESEntry* e = &g_resArchive->entries[index];
     if (e->offset + e->size > g_resArchive->fileSize) return false;
     memcpy(buffer, g_resArchive->data + e->offset, e->size);
-    res_xor_decrypt(buffer, e->size);
+    if (!g_resArchive->isPack) res_xor_decrypt(buffer, e->size);
     return true;
 }
 
