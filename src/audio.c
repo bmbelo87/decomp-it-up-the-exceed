@@ -306,7 +306,9 @@ int Audio_LoadFromResource(const char* name, int resId) {
 }
 
 /* WAVs embutidos no executável (build/generated/wave_embedded.c, gerado por
- * tools/embed_waves.py). O original os guarda como recursos do PUMPY.EXE. */
+ * tools/embed_waves.py). O original os guarda como recursos do PUMPY.EXE.
+ * DESATIVADO no Exceed: o exceed.exe le WAVE/ do disco (strings "WAVE/xxx.wav"). */
+/*
 typedef struct { const char* name; const uint8_t* data; uint32_t size; } EmbeddedWave;
 extern const EmbeddedWave g_embeddedWaves[];
 
@@ -319,19 +321,21 @@ static int wave_name_eq(const char* a, const char* b) {
     }
     return *a == *b;
 }
+*/
 
 int Audio_LoadWaveFile(const char* filename) {
     char path[MAX_PATH];
     snprintf(path, sizeof(path), "%s/WAVE/%s", g_game.currentDirectory, filename);
     FILE* f = fopen(path, "rb");
     if (!f) {
-        /* Sem WAVE/ no disco: usa a cópia embutida. */
+        /* Sem WAVE/ no disco: usa a cópia embutida. (desativado no Exceed)
         for (int i = 0; g_embeddedWaves[i].name; i++) {
             if (wave_name_eq(g_embeddedWaves[i].name, filename))
                 return Audio_LoadWAV(filename, g_embeddedWaves[i].data,
                                      (DWORD)g_embeddedWaves[i].size);
         }
-        Log_Print("Audio: failed to open '%s' (nem embutido)\n", path);
+        */
+        Log_Print("Audio: failed to open '%s'\n", path);
         return -1;
     }
     fseek(f, 0, SEEK_END);
