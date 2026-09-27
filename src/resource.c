@@ -387,8 +387,8 @@ int loadTextureFromRES(const char* resName) {
             strncpy(base, resName, sizeof(base) - 1);
         }
 
-        const char* exts[] = { "png", "tga", "jpg", "bmp" };
-        for (int ei = 0; ei < 4; ei++) {
+        const char* exts[] = { "png", "tga", "jpg", "bmp", "dds" }; /* dds: Exceed */
+        for (int ei = 0; ei < 5; ei++) {
             char tryName[64];
             snprintf(tryName, sizeof(tryName), "%s.%s", base, exts[ei]);
             idx = RES_Find(tryName);

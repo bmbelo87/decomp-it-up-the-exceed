@@ -126,6 +126,8 @@ add_executable(Pumpy
     src/staff.c
     src/movie.c
     src/intro.c
+    src/exceed_select.c
+    src/exceed_songs.c
     src/service_menu.c
     src/coin.c
     src/debug_console.c

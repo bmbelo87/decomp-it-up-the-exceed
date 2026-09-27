@@ -112,8 +112,30 @@ typedef enum {
     STATE_GAMEPLAY_BEGIN  = 0x85,
     STATE_INTRO           = 0x90, /* Exceed: CIntro — BGA\INTRO.MOV + AUDIO\001.AUD */
     STATE_CREDIT          = 0x91, /* Exceed: CTitle — CREDIT.MOV */
+    STATE_EXSELECT        = 0x92, /* Exceed: CSelect — BGA\SELECT.DAT + SELECT2.DAT + 90.DAT */
     STATE_EXIT            = 0xFF,
 } GameState;
+
+/* Exceed: registro da tabela de músicas do exceed.exe (0x004551E0, 56 bytes no
+ * original). Aqui é só a cópia em C (exceed_songs.c, gerado por
+ * tools/gen_exceed_songs.py) — não é lido de arquivo, então os ponteiros não
+ * precisam casar com o layout de 32 bits. */
+#define EX_SONG_COUNT     105   /* 0x69: limite dos loops em 0x4154A3 / 0x41624A */
+#define EX_CHANNEL_COUNT  3     /* 0 BANYA, 1 K-POP, 2 POP */
+#define EX_CHANNEL_MAX    50    /* 0x32: linha de 0xC8 bytes em 0x004568E0 */
+typedef struct {
+    uint32_t    id;         /* +0x00  hex -> "%X" nos nomes de arquivo */
+    const char* artistKr;   /* +0x04 */
+    const char* artistEn;   /* +0x08 */
+    const char* titleKr;    /* +0x0C */
+    const char* titleEn;    /* +0x10 */
+    double      bpm;        /* +0x18 */
+    int         level[5];   /* +0x20 NORMAL HARD CRAZY FREESTYLE(Double) NIGHTMARE, -1 = não existe */
+    uint8_t     visible;    /* +0x34 */
+    uint8_t     hidden;     /* +0x35 — init 0x416474: visible = (hidden == 0) */
+} ExceedSong;
+extern const ExceedSong g_exSongs[EX_SONG_COUNT];
+extern const int g_exChannels[EX_CHANNEL_COUNT][EX_CHANNEL_MAX];
 
 typedef enum {
     PAD_UL    = 0,
@@ -240,6 +262,11 @@ typedef struct {
     int layerCount;
     BGALayer layers[MAX_BGA_LAYERS];
     int maxFrame;
+    /* Exceed: o jogo endereça camadas pelo slot do arquivo (0x41F55C, 0..49),
+     * contando slots vazios; o parser compacta, então guarda slot -> camada. */
+    int slotLayer[MAX_BGA_LAYERS];   /* -1 = slot vazio */
+    int slotCount;
+    float scaleX, scaleY;            /* 0x41F754 (+0x11AAAC/+0x11AAB0) */
 } BGAPicture;
 
 typedef struct {
@@ -516,6 +543,10 @@ typedef enum {
     SND_COIN_PARTIAL, /* 01-1.WAV:  moeda inserida sem fechar crédito */
     SND_COIN_CREDIT,  /* COIN2.WAV: crédito completo */
     SND_10_1,   /* 10-1.WAV: bip do TIME no SongSelect, a cada segundo a partir de 10 */
+    SND_CHGMOD,     /* Exceed CHGMOD.WAV    [0xA6D300]: troca de canal / cancela o painel */
+    SND_START,      /* Exceed START.WAV     [0xA6D2EC]: confirmação da música */
+    SND_TIME_LIMIT, /* Exceed TIME_LIMIT.WAV [0xA6D30C]: contador da Select <= 5 */
+    SND_PUSHPANEL,  /* Exceed PUSHPANEL.WAV [0xA6D2E8]: jogador entra na Select */
     SND_COUNT
 } SoundID;
 
@@ -617,6 +648,10 @@ void Gamestate_UpdateWarning(float dt);
 void Gamestate_UpdateLogo(float dt);
 void Gamestate_UpdateIntro(float dt);
 void Gamestate_RenderIntro(void);
+unsigned Title_GetJoinedMask(void); /* intro.c — [0x568FF4] bits 0/1 */
+void ExSelect_Enter(void);          /* exceed_select.c — CSelect */
+void ExSelect_Update(float dt);
+void ExSelect_Render(void);
 void Gamestate_UpdateMenu(float dt);
 extern bool g_cdLoaded;
 void Gamestate_UpdateSongSelect(float dt);

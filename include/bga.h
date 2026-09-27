@@ -11,4 +11,9 @@ bool layerMatchesDirection(BGALayer* layer, int sel);
 int findBGALoopStart(void);
 int findBGALoopEnd(void);
 
+/* Exceed: camada por slot do arquivo (0x41F55C) e escala global (0x41F754) */
+int BGA_DrawSlot(int bgaIndex, int frame, int slot);
+void BGA_SetScale(int bgaIndex, float sx, float sy);
+void BGA_SetColor(int bgaIndex, float rgb, float a);   /* 0x41F754 */
+
 #endif

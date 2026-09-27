@@ -366,7 +366,11 @@ static const char* g_waveFiles[SND_COUNT] = {
     "7-1.wav",    // SND_7_1
     "01-1.wav",   // SND_COIN_PARTIAL
     "COIN2.wav",  // SND_COIN_CREDIT
-    "10-1.wav"    // SND_10_1
+    "10-1.wav",   // SND_10_1
+    "CHGMOD.wav",     // SND_CHGMOD
+    "START.wav",      // SND_START
+    "TIME_LIMIT.wav", // SND_TIME_LIMIT
+    "PUSHPANEL.wav"   // SND_PUSHPANEL
 };
 
 int g_waveSoundIds[SND_COUNT];

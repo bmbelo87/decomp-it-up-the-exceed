@@ -690,3 +690,76 @@ O cursor do Song Select **volta pra última música jogada** (`g_game.songSelect
 NUNCA confunda os dois. Verifique a extensão do arquivo antes de chamar a função:
 - `.sp2` → `SPR_LoadSP2`
 - `.spr` → `SPR_LoadSPR`
+
+---
+
+## Exceed — Song Select (análise do exceed.exe, 26/09/2026)
+
+Lista de músicas completa em `exceed_songlist.txt` (raiz). Nada disso vem do `stage.cfg`: está tudo compilado no `.exe`.
+
+### Fatos (confirmados no assembly)
+
+- **Tabela de músicas** `0x004551E0`: 105 registros × 56 bytes, terminados por `id=0`.
+  `+0x00 u32 id (hex → nome de arquivo via %X)`, `+0x04/+0x08 artista KR/EN`, `+0x0C/+0x10 título KR/EN` (ponteiros para `.data1`, CP949),
+  `+0x14 u32 0`, `+0x18 double BPM`, `+0x20..+0x30 5×s32 níveis NORMAL/HARD/CRAZY/FREESTYLE(=Double no dado)/NIGHTMARE (-1 = inexistente)`,
+  `+0x34 byte visível`, `+0x35 byte oculta`. Na init (`0x416474`): `vis = (oculta == 0)`.
+- **Canais** `int[3][50]` em `0x004568E0` (linha 0xC8 bytes, lista terminada em 0). É a ordem de exibição.
+  0 = BANYA (46), 1 = K-POP (31), 2 = POP (28). As 105 músicas aparecem uma vez cada. Nome do canal por índice: altamente provável (pelo conteúdo).
+- **Montagem da lista visível** `0x4192F0` → `0x563A00`. Oculta só entra se o jogador tiver o bit `0x2000` em `+0x184`.
+- **Arquivos por ID**: `STEP\%X.STX`, `AUDIO\%X.AUD`, banner `%X.TGA` dentro de `BGA\90.DAT`.
+- **Banners** (`0x416206..0x41624F`): abre `90.DAT`, carrega `%X.TGA` para cada uma das 105 músicas e grava o handle em `0x456B40[i]+4` (`{id, tex}`, tex inicial -1).
+- **SELECT.DAT → `[obj+4]`, SELECT2.DAT → `[obj+8]`**: os dois BGAs ficam carregados ao mesmo tempo (`0x4161E6`). Os assets são idênticos; só o `.bga` muda.
+  O SELECT2 é usado por slot: `0x41F55C(frame, slot)` posiciona o slot e `0x41F754(i, 1.0)` define intensidade (0.5 = apagado).
+- **Troca de canal**: `[+0x5C]` = canal, `[+0x60]` = canal anterior, `[+0x64]` = direção.
+  - P1 `0x08` / P2 `0x800` → `0x417F87`: dir=1, canal-1 (0→2→1→0).
+  - P1 `0x10` / P2 `0x1000` → `0x41803E`: dir=2, canal+1.
+  - Animação (`0x416C1D`), 30 frames (t=0..29):
+    - dir=1 → slots 6,7,10,11 (`Xrot1`, `Xrot1t`, `Xrot2`, `Xrot2t`, scaleX +1) no frame `480+t`.
+    - dir=2 → slots 8,9,12,13 (os mesmos SPRs espelhados, scaleX -1) no frame `360+t`.
+    - Fim ou canal igual → dir=0 e slot 24 no frame 30.
+  - `Xrot1` (xrotR, 512 px) + `Xrot2` (xrotL, 128 px em x=512) = tela inteira, mesmo esquema de `X.spr` + `xs.spr`. O sufixo `t` = quadros finais 14–21.
+- **Numeração de slots do BGA2**: conta **todos** os registros, inclusive os vazios (nome vazio e count 0). Isso bate com os índices usados pelo `.exe`.
+- **Ícones de modificador** (SELECT2):
+  - Slots 11–19 = **P1** (x=14); slots 1–9 = **P2** (x=585). A rotina `0x419B2C` testa o bit 2 (P2) e usa o jogador 1. (Corrigido em 26/09/2026: antes estava invertido.)
+  - Bits em `+0x184`: `0x10`→x8 (slot 2), `0x08`→x4 (3), `0x04`→x3 (4), `0x02`→x2 (5).
+  - Sem velocidade: `0x400` → rv (1); caso contrário, x2 apagado.
+  - `0x80` → slot 6 (`r.spr`) aceso/apagado.
+- **Painel de dificuldade** (SELECT2, slots 31–49):
+  - Tabela `0x455194` = slots {44 normal, 45 hard, 46 crazy, 49 Battle}, com bits em `0x4551A4` {0x10, 0x20, 0x400, 0x40}.
+  - Tabela `0x4551B4` = slots {44..48 normal, hard, crazy, free, night}, com bits em `0x4551C8` {0x10, 0x20, 0x400, 0x200, 0x800}.
+
+### Hipóteses
+
+- UL (vermelho esquerdo) = bit `0x08` e UR = `0x10`, por analogia com o Prex3 (`pumpy.h:375`). Isso não foi confirmado no Exceed.
+- O bit `0x2000` do jogador = código de desbloqueio.
+- **CUIDADO:** o `0x80` do Exceed acende o `r.spr`; no Prex3 o `pumpy.h` diz `0x80 = Non-Step`. Não reaproveitar os bits de modificador do Prex3 sem verificar.
+
+### Em aberto
+
+- Bits de m, v e ns (slots 7–9 do SELECT2).
+- O que escolhe entre a tabela com Battle e a tabela com Freestyle/Nightmare.
+- Posição e tamanho do banner no draw (`0x41972A` em diante).
+- O que o slot 24 (`main_s.spr`) no frame 30 representa no repouso.
+
+### Select implementada (`src/exceed_select.c`, 26/09/2026, confirmada visualmente)
+
+- 3D do S3D = espaço do GL do projeto: **Y para cima, câmera olhando -Z**. `S3DSetProjection(43.603)` equivale a um frustum com câmera a 600 do plano z=0, que fica 1:1 com 640x480. Coordenadas e TexCoords do original entram direto, sem flip.
+- **ERRADO (não repetir):** tratar o 3D como Y para baixo com +Z afastando (D3D8). Isso curva a roda para cima e deixa o banner central grande demais.
+- Ponteiros S3D: `a6da7c` Begin, `a6da80` End, `a6da8c` Vertex3f, `a6da94` TexCoord2f, `a6da9c` Push, `a6daa0` Pop, `a6daa4` Translatef, `a6daa8` Rotatef, `a6dad0` SetOrtho, `a6dad4` SetProjection. A tabela de strings aparece deslocada em 1 em relação a esses ponteiros.
+
+### Códigos de comando da Select (0x455140..0x455192, verificador 0x4155AC P1 / 0x415958 P2)
+
+Buffers por jogador: 9, 5 e 6 botões. Quando algo muda, toca `2-1.WAV`. Bits em `+0x184` do jogador:
+- `UL UR UL UR C`: velocidade x1→x2(0x2)→x3(0x4)→x4(0x8)→x8(0x10)→rv(0x400)→x1
+- `UL UR DL DR C`: 0 → 0x20 (v) → 0x100 (ns) → 0x120 → 0
+- `UL UR UL UR UL UR UL UR C`: ^0x400 (rv), limpa 0x2/0x4/0x8
+- `DR DL UR UL DR DL UR UL C`: ^0x40 (m)
+- `UL UR UL UR DL DR DL DR C`: ^0x80 (r), limpa 0x200
+- `UL DL UR DR DR UL UR DL C`: ^0x800 (sem ícone, efeito não identificado)
+- `DR DL UR UL DR UR DL UL C`: ^0x1000, limpa velocidade e rv (sem ícone, efeito não identificado)
+- `UR UR DL UL DR UR UL UR UR`: |0x2000 = **desbloqueia as ocultas** (A03, A26, A27) + 0x419424
+- `DL UR DL UR DR UL DR UL C`: [0x568FF4] ^= 0x8000 = **X-MODE** (flag global; identificado pelo usuário pela sequência, 26/09/2026)
+- `DL DR DL DR DL DR`: zera todos os modificadores
+
+Ícones do SELECT2: slot 1 rv 0x400 · 2..5 x8/x4/x3/x2 · 6 r 0x80 · 7 m 0x40 · 8 v 0x20 · 9 ns 0x100.
+Nomes por inicial (Random/Mirror/Vanish/Non-Step): provável, não confirmado no gameplay.

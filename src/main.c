@@ -45,8 +45,8 @@ static void LoadBGAForState(GameState state) {
     switch (state) {
     case STATE_WARNING_INIT:
     case STATE_WARNING_ANIM: bgaName = "R_WARN_A"; break; /* Exceed: BGA\R_WARN_A.DAT */
-    case STATE_INTRO:
-    case STATE_CREDIT:       bgaName = ""; break;       /* vídeo, sem BGA */
+    case STATE_INTRO:        bgaName = ""; break;       /* vídeo, sem BGA */
+    case STATE_CREDIT:       bgaName = "82"; break;     /* CTitle::Begin 0x41C04A: BGA\82.DAT sobre o CREDIT.MOV */
     case STATE_LOGO_ENTER:   bgaName = "81"; break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
@@ -98,6 +98,12 @@ static void LoadBGAForState(GameState state) {
                 Resource_LoadBGADirect(directPath);
             }
         }
+    }
+
+    /* Exceed CSelect: SELECT.DAT + SELECT2.DAT juntos + banners do 90.DAT */
+    if (state == STATE_EXSELECT) {
+        BGM_Stop();
+        ExSelect_Enter();
     }
 
     if (state == STATE_MENU_ENTER) {
@@ -385,6 +391,9 @@ void Game_Update(float dt) {
     case STATE_CREDIT:
         Gamestate_UpdateIntro(dt);
         break;
+    case STATE_EXSELECT:
+        ExSelect_Update(dt);
+        break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
         Gamestate_UpdateMenu(dt);
@@ -646,7 +655,9 @@ void Game_Render(void) {
         g_game.state != STATE_GAMEOPTION &&
         g_game.state != STATE_GAMEOPTION_EXIT &&
         g_game.state != STATE_SONG_SELECT &&
-        g_game.state != STATE_SONG_SELECT_B) {
+        g_game.state != STATE_SONG_SELECT_B &&
+        g_game.state != STATE_CREDIT &&         /* CREDIT desenha por slot (intro.c) */
+        g_game.state != STATE_EXSELECT) {       /* EXSELECT desenha por slot (exceed_select.c) */
         BGA_Render(0, g_game.bgaFrame);
     }
 
@@ -654,6 +665,9 @@ void Game_Render(void) {
         case STATE_INTRO:
         case STATE_CREDIT:
             Gamestate_RenderIntro();
+            break;
+        case STATE_EXSELECT:
+            ExSelect_Render();
             break;
         case STATE_MENU_ENTER:
         case STATE_MENU_INPUT:

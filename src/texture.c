@@ -428,6 +428,83 @@ void Texture_ApplyFilterAll(void) {
     }
 }
 
+/* DDS DXT5 (todas as texturas .dds do Exceed são DXT5 sem mipmap).
+ * Decodificado em software para RGBA; linha 0 = topo, como o PNG. */
+static void dxt_color565(uint16_t c, uint8_t* o) {
+    o[0] = (uint8_t)(((c >> 11) & 31) * 255 / 31);
+    o[1] = (uint8_t)(((c >> 5) & 63) * 255 / 63);
+    o[2] = (uint8_t)((c & 31) * 255 / 31);
+}
+
+static bool Texture_LoadDDS(const char* path, uint8_t** dataOut, int* wOut, int* hOut) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* d = (uint8_t*)malloc((size_t)sz);
+    if (!d) { fclose(f); return false; }
+    size_t got = fread(d, 1, (size_t)sz, f);
+    fclose(f);
+    if (got != (size_t)sz || sz < 128 || memcmp(d, "DDS ", 4) != 0) { free(d); return false; }
+
+    int h = (int)*(uint32_t*)(d + 12);
+    int w = (int)*(uint32_t*)(d + 16);
+    uint32_t pfFlags = *(uint32_t*)(d + 80);
+    if (!(pfFlags & 4) || memcmp(d + 84, "DXT5", 4) != 0) {
+        Log_Print("Texture: DDS '%s' formato nao suportado\n", path);
+        free(d); return false;
+    }
+    int bw = (w + 3) / 4, bh = (h + 3) / 4;
+    if (128 + (long)bw * bh * 16 > sz) { free(d); return false; }
+
+    uint8_t* out = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!out) { free(d); return false; }
+    const uint8_t* b = d + 128;
+    for (int by = 0; by < bh; by++) {
+        for (int bx = 0; bx < bw; bx++, b += 16) {
+            uint8_t a[8];
+            a[0] = b[0]; a[1] = b[1];
+            if (a[0] > a[1]) {
+                for (int i = 1; i < 7; i++) a[i + 1] = (uint8_t)(((7 - i) * a[0] + i * a[1]) / 7);
+            } else {
+                for (int i = 1; i < 5; i++) a[i + 1] = (uint8_t)(((5 - i) * a[0] + i * a[1]) / 5);
+                a[6] = 0; a[7] = 255;
+            }
+            uint64_t abits = 0;
+            for (int i = 0; i < 6; i++) abits |= (uint64_t)b[2 + i] << (8 * i);
+
+            uint16_t c0 = (uint16_t)(b[8] | (b[9] << 8));
+            uint16_t c1 = (uint16_t)(b[10] | (b[11] << 8));
+            uint8_t c[4][3];
+            dxt_color565(c0, c[0]);
+            dxt_color565(c1, c[1]);
+            for (int k = 0; k < 3; k++) {         /* DXT5: sempre o modo de 4 cores */
+                c[2][k] = (uint8_t)((2 * c[0][k] + c[1][k]) / 3);
+                c[3][k] = (uint8_t)((c[0][k] + 2 * c[1][k]) / 3);
+            }
+            uint32_t cbits = (uint32_t)(b[12] | (b[13] << 8) | (b[14] << 16) | ((uint32_t)b[15] << 24));
+
+            for (int py = 0; py < 4; py++) {
+                int y = by * 4 + py;
+                if (y >= h) break;
+                for (int px = 0; px < 4; px++) {
+                    int x = bx * 4 + px;
+                    if (x >= w) continue;
+                    int p = py * 4 + px;
+                    uint8_t* o = out + ((size_t)y * w + x) * 4;
+                    const uint8_t* cc = c[(cbits >> (2 * p)) & 3];
+                    o[0] = cc[0]; o[1] = cc[1]; o[2] = cc[2];
+                    o[3] = a[(abits >> (3 * p)) & 7];
+                }
+            }
+        }
+    }
+    free(d);
+    *dataOut = out; *wOut = w; *hOut = h;
+    return true;
+}
+
 static bool Texture_LoadFile(const char* path, uint8_t** dataOut, int* wOut, int* hOut, int* fmtOut) {
     const char* ext = strrchr(path, '.');
     if (!ext) return false;
@@ -450,6 +527,14 @@ static bool Texture_LoadFile(const char* path, uint8_t** dataOut, int* wOut, int
 
     if (_stricmp(ext, ".tga") == 0) {
         return Texture_LoadTGA(path, dataOut, wOut, hOut, fmtOut);
+    }
+
+    if (_stricmp(ext, ".dds") == 0) {
+        if (Texture_LoadDDS(path, dataOut, wOut, hOut)) {
+            *fmtOut = GL_RGBA;
+            return true;
+        }
+        return false;
     }
 
     return false;

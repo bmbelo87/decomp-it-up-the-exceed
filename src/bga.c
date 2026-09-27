@@ -73,9 +73,12 @@ static bool parseBGA2(const uint8_t* bgaData, uint32_t bgaSize, BGAPicture* pic)
 
     memset(pic, 0, sizeof(BGAPicture));
     pic->version = 2;
+    pic->scaleX = pic->scaleY = 1.0f;
+    for (int s = 0; s < MAX_BGA_LAYERS; s++) pic->slotLayer[s] = -1;
 
     int entryPos = 16;
     while (entryPos + 64 + 4 <= (int)bgaSize && pic->layerCount < MAX_BGA_LAYERS) {
+        int slot = pic->slotCount++;
         char filename[64];
         memcpy(filename, bgaData + entryPos, 64);
         filename[63] = '\0';
@@ -97,6 +100,7 @@ static bool parseBGA2(const uint8_t* bgaData, uint32_t bgaSize, BGAPicture* pic)
 
         BGALayer* layer = &pic->layers[pic->layerCount];
         strncpy(layer->filename, filename, sizeof(layer->filename) - 1);
+        if (slot < MAX_BGA_LAYERS) pic->slotLayer[slot] = pic->layerCount;
 
         char* dot = strrchr(filename, '.');
         layer->isSPR = (dot && (_stricmp(dot, ".spr") == 0 || _stricmp(dot, ".sp2") == 0));
@@ -485,10 +489,18 @@ int findBGALoopEnd(void) {
     return firstHidden - 1;
 }
 
+/* Exceed 0x41F754(rgb, a): multiplicador de cor do BGA (+0x11AAAC/+0x11AAB0),
+ * aplicado só no desenho por slot (0x41F11C: RGB do keyframe * rgb, alpha * a).
+ * Default 1.0 (0x41EE55/0x41EE61). s_slotRGB/s_slotA valem durante um DrawSlot. */
+static float s_picRGB[MAX_BGA_PICS];
+static float s_picA[MAX_BGA_PICS];
+static bool  s_picColorSet[MAX_BGA_PICS];
+static float s_slotRGB = 1.0f, s_slotA = 1.0f;
+
 static void renderOneLayer(BGALayer* layer, BGAKeyframe* state, int picVersion, float animT) {
     if (!state || state->type == 0 || state->a <= 0.01f) return;
-    float alpha = state->a;
-    float renderR = state->r, renderG = state->g, renderB = state->b;
+    float alpha = state->a * s_slotA;
+    float renderR = state->r * s_slotRGB, renderG = state->g * s_slotRGB, renderB = state->b * s_slotRGB;
 
     glEnable(GL_BLEND);
     /* FUN_00401450 no original: 5 modos de blend
@@ -648,6 +660,54 @@ void BGA_SetEventLayer(int bgaIndex, int frame, int layerIdx) {
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
+/* Exceed 0x41F55C(frame, slot): desenha a camada do slot no quadro dado.
+ * frame < 0 vira 0; slot fora de 0..49 é ignorado. Retorna 1 quando o quadro
+ * já passou do último keyframe da camada (0x41F11C, ramo em 0x41F167). */
+int BGA_DrawSlot(int bgaIndex, int frame, int slot) {
+    if (frame < 0) frame = 0;
+    if (slot < 0 || slot > 0x31) return 0;
+    if (bgaIndex < 0 || bgaIndex >= g_game.bgaPicCount) return 0;
+    BGAPicture* pic = &g_game.bgaPics[bgaIndex];
+    int li;
+    if (pic->slotCount == 0) {
+        /* BGA vindo do RES (resource.c): o parser já mantém os slots vazios,
+         * então índice de camada == slot. */
+        if (slot >= pic->layerCount) return 0;
+        li = slot;
+    } else {
+        if (slot >= pic->slotCount) return 0;
+        li = pic->slotLayer[slot];
+        if (li < 0) return 0;
+    }
+    BGALayer* layer = &pic->layers[li];
+    if (layer->kfCount == 0 || frame < layer->keyframes[0].frame) return 0;
+    if (frame >= layer->keyframes[layer->kfCount - 1].frame) return 1;
+    if (s_picColorSet[bgaIndex]) {
+        s_slotRGB = s_picRGB[bgaIndex];
+        s_slotA = s_picA[bgaIndex];
+    }
+    BGA_SetEventLayer(bgaIndex, frame, li);
+    s_slotRGB = 1.0f;
+    s_slotA = 1.0f;
+    return 0;
+}
+
+/* Exceed 0x41F754(rgb, a) — ver s_picRGB acima */
+void BGA_SetColor(int bgaIndex, float rgb, float a) {
+    if (bgaIndex < 0 || bgaIndex >= MAX_BGA_PICS) return;
+    s_picRGB[bgaIndex] = rgb;
+    s_picA[bgaIndex] = a;
+    s_picColorSet[bgaIndex] = true;
+}
+
+/* HIPÓTESE DESCARTADA (26/09/2026): 0x41F754 não é escala, é cor — ver
+ * BGA_SetColor. Mantido sem chamadas. */
+void BGA_SetScale(int bgaIndex, float sx, float sy) {
+    if (bgaIndex < 0 || bgaIndex >= g_game.bgaPicCount) return;
+    g_game.bgaPics[bgaIndex].scaleX = sx;
+    g_game.bgaPics[bgaIndex].scaleY = sy;
+}
+
 void BGA_SetEventFrame(int bgaIndex, int frame) {
     if (bgaIndex < 0 || bgaIndex >= g_game.bgaPicCount) return;
     BGAPicture* pic = &g_game.bgaPics[bgaIndex];
@@ -673,6 +733,7 @@ void BGA_Shutdown(void) {
     memset(g_game.sprTiles, 0, sizeof(g_game.sprTiles));
     bga_activePic = -1;
     g_game.bgaPicCount = 0;
+    memset(s_picColorSet, 0, sizeof(s_picColorSet));   /* volta ao default 1.0 (0x41EE55) */
     g_game.bgaFrame = 0;
     g_game.bgaMaxFrame = 0;
     g_game.bgaTimer = 0;
