@@ -769,3 +769,64 @@ Buffers por jogador: 9, 5 e 6 botões. Quando algo muda, toca `2-1.WAV`. Bits em
 
 Ícones do SELECT2: slot 1 rv 0x400 · 2..5 x8/x4/x3/x2 · 6 r 0x80 · 7 m 0x40 · 8 v 0x20 · 9 ns 0x100.
 Nomes por inicial (Random/Mirror/Vanish/Non-Step): provável, não confirmado no gameplay.
+
+### Modificadores 0x800 e 0x1000 (identificados no gameplay, 26/09/2026)
+
+- Cópia dos modificadores no gameplay: P1 `[+0x48EDC]`, P2 `[+0x4906C]`.
+- `0x800`: **esconde a zona de passos** (receptores). Em `0x40434F`/`0x404446` pula o desenho de `01.spr`/`02.spr` do `00.DAT`, que são as setas-alvo do `ST01`. Confirmado.
+- `0x1000`: **velocidade variável**. Em `0x406745..0x406843` grava em `[+0x48E9C]` 1000/2000/3000 (x1/x2/x3), conforme o cronômetro `[+0x48C30]`: ciclo de 360 (metade 1000 / metade 2000) ou ciclo de 1000 (>250 → 2000, senão 3000). O código de ativação limpa as velocidades fixas. Confirmado.
+- A tabela `0x456F84` (`0x41BDD8`) é de presets do modo demo e usa outro espaço de bits.
+
+### Select: contador, entrada tardia e BATTLE (26/09/2026)
+
+- **Contador**: 60 s pelo cronômetro `[this+0x18]`. Com o valor ≤ 5, cada mudança toca `TIME_LIMIT.WAV`. Ao chegar a 0, começa o jogo: sem painel, usa o primeiro modo disponível (`0x4187A9`). Dígitos: `font4.tga` do `BGA\BFONT.DAT`, grade de 7 colunas, 35x32. Desenhado em (607,431) com blend normal e em (605,433) com blend aditivo.
+- **Entrada tardia** (`0x41944C`): com crédito, CENTER de quem não entrou toca `PUSHPANEL.WAV`, consome o crédito e fecha o painel. Os handlers só leem os painéis de quem entrou.
+- **BATTLE** (os dois dentro): o painel oferece só N/H/C/BATTLE (`0x4551A4`, ícones `0x455194`: 44/45/46/49). A linha BATTLE mostra o nível da dificuldade `[+0x8C]` (padrão: a última disponível entre N/H/C). DR na última linha troca essa dificuldade (`0x41816A`).
+
+## Exceed — atração, HIGHSCORE, demo e pontuação (27/09/2026)
+
+### Fatos (confirmados no assembly)
+
+- `piu` (na pasta do jogo) é o build Linux do arcade (ALSA, GLX, `ioperm`, libmad). Mantém os nomes das classes do RTTI:
+  CLogo, CIntro, CTitle, CIdle, CPlayAd, CSelect, CPlayEngine, CStep, CNextStage, CStageBreak, CPlayGrade,
+  CGameOver, CHighscore, CNameInput, CInternetRanking, CRegionWarning, CSetup, CProc, CTextureManager.
+- Estados são registrados por nome em `0x40F880..` (`0x410244(nome, objeto)`) e trocados por `0x4102D4("NOME")`.
+- **CIdle** (vtable `0x1282BC8`): contador `[+4]` % 4 → LOGO, INTRO, HIGHSCORE, demo. Toda tela da atração vai para
+  IDLE ao terminar (`0x413394`) e para TITLE com crédito (`0x41FE94`). O TITLE só aparece com crédito.
+- **Demo**: `RUN A%02d -h -demo` (`0x41926C`, contador `[0x455100]`, pula a A03). `-demo` → `[0x568FF4] = 0x100533`,
+  autoplay nos dois lados, 35 s (`0x402B82`), som só com a EEPROM `+0x7F0`, rótulo = tile 0x15 do arrow542 em (120,20)/(520,20).
+- **CHighscore** (vtable `0x1282B88`): `BGA\HS.DAT`, texto com `bfont.tga` do BFONT.DAT (grade 8x8, tabela `0x456FAC`).
+  Ranking na EEPROM (`eeprom.bin`, 2048 bytes): pontuação em `0x74B + 4k`, nome de 4 letras em `0x79B + 4k`, 20 posições.
+- **Pontuação** (`0x409BC2..0x40A0CD`): PERFECT +1000 (+1000 com combo ≥ 4), GREAT +500 (+1000), GOOD +100, BAD −700,
+  MISS −1000; score ≥ 0.
+- **Nota** (CGrade Begin): `score / (1500·N − 3000 − 250·K)`; S ≥ 1.0 sem MISS, A ≥ 0.95, B ≥ 0.90, C ≥ 0.85, D ≥ 0.75.
+  N = linhas julgadas; K = linhas fechadas com todas as setas pisadas (tratado como N − MISS: provável).
+- **Progressão** (`0x40D0E7`): os dois < 0.75 → GAMEOVER; estágios 1 e 2 → NEXTSTAGE; no 3º, extra se algum jogador
+  tiver as três razões ≥ 0.95; depois do extra → NAMEINPUT ou IR (não implementados).
+- **X-MODE**: deslocamento lateral = distância vertical (±, por jogador/metade); o hold inteiro segue o X da cabeça.
+
+### Desativado (#if 0)
+
+`song_select.c`, `staff.c`, telas de `menu.c` e de `game_option.c` (Prex3). `Menu_ResetState`, `GameOption_Load/Save`
+e `g_cdLoaded` continuam ativos.
+
+## Exceed — console, hold, BATTLE (30/09/2026)
+
+### Fatos (confirmados no assembly)
+
+- **Hold**: nos dois caminhos do julgamento (single `0x4086a8`, double `0x408a79`) o botão segurado (`[0x568FF0]`)
+  só gera o aperto com `Y <= 0.0` (`0x449450`). Não existe a antecipação do Double do Prex3 → `holdLeadSec` retorna 0 no Exceed.
+- **Procs** (registro `0x40F880..`, `0x410244`): IDLE RWARN LOGO TITLE PLAY RUN NEXTSTAGE GAMEOVER STAGEBREAK GRADE SELECT
+  NAMEINPUT IR HIGHSCORE SETUP INTRO COKE. **COKE** = CPlayAd (`0x4133E0`): `COKE 1|2` toca `BGA\COKE<n>.MOV` + `AUDIO\COKE<n>.AUD`
+  e vai para IDLE; só é chamado pelo console. Os arquivos não existem na instalação.
+- **Console** (`0x41D0CC`): `/credits /drawfps /drawjudgerange /proclist /runproc /play /set`, senão `Unknown Command: %s`.
+  `/drawjudgerange` só alterna `+0x48D4A` (nenhum código lê). `/set <var> <valor>`: câmera da roda da Select
+  (`x1 x2 y1 y2 z1 r r2 r3 tx ty p cy cy2` = `0x456E9C..0x456EC4`, `0x563AC8/CC`). Implementado em `debug_console.c` (`g_exCommands`).
+- **RUN/PLAY** (`0x401A0A`): `<step> <modo> [-demo|-demo2]`, modos `-n -h -c -dv -d -nm -bt`; `-hd` → "Half-double mode is not
+  implemented." → IDLE. **A linha de comando do .exe é ignorada** (WinMain: `UNREFERENCED_PARAMETER(lpCmdLine)`).
+- **BATTLE** gameplay (`0x40329D..0x403437`): `BT_MC01.SPR` + max combo P1 em (256, 70+6·blink), marca `<`/`=`/`>` em (337, 70−6·blink),
+  P2 em (408, 70+6·blink); dígitos 40x48 do `BT_MC` a partir de V=163/256 (`0x401000`/`0x4010FC`/`0x401240`). `exBattleDraw` em `gameplay.c`.
+- **BATTLE** nota (`0x40DAE9` P1 / `0x40D78D` P2): no lugar da letra, WIN `0x29/0x2A` ou LOSE `0x26/0x27`. Vence o maior max combo;
+  empate → maior score; empate de score → P1.
+- **Nomes dos bits** (`pump.h` do src original): `0x200 VRAND`, `0x400 RACCEL` (rv), `0x800 FREEDOM`, `0x1000 EARTHWORM`,
+  `0x2000 SHOWHIDDEN`, `0x8000 EXCEED` (X-MODE), `0x10000 ARROW_STAR` (comentado no original).

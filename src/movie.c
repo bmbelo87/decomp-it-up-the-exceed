@@ -162,6 +162,7 @@ void Movie_Close(void) {
 
 bool Movie_IsOpen(void) { return g_mov.f != NULL; }
 bool Movie_HasEnded(void) { return g_mov.ended; }
+int  Movie_GetDecoded(void) { return g_mov.decoded; }
 
 static void movie_upload(void) {
     const mp2_fbuf* fb = g_mov.info->display_fbuf;
@@ -214,6 +215,9 @@ void Movie_Update(float dt) {
 /* Tela cheia 640x480. Projeção Y-UP: linha 0 do quadro (topo) vai em y=480. */
 void Movie_Render(void) {
     if (!g_mov.hasFrame) return;
+    /* Restaura o blend no fim: o gameplay desenha por cima contando com o
+     * estado que estava ligado (sem isso os sprites saem com fundo). */
+    GLboolean blend = glIsEnabled(GL_BLEND);
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
     glBindTexture(GL_TEXTURE_2D, g_mov.tex);
@@ -224,6 +228,7 @@ void Movie_Render(void) {
     glTexCoord2f(1, 1); glVertex2f(640, 0);
     glTexCoord2f(0, 1); glVertex2f(0, 0);
     glEnd();
+    if (blend) glEnable(GL_BLEND);
 }
 
 #else /* sem MPEG2.dll fora do Windows */
@@ -236,6 +241,7 @@ bool Movie_Open(const char* path, bool loop) {
 void Movie_Close(void) {}
 bool Movie_IsOpen(void) { return false; }
 bool Movie_HasEnded(void) { return true; }
+int  Movie_GetDecoded(void) { return 0; }
 void Movie_Update(float dt) { (void)dt; }
 void Movie_Render(void) {}
 

@@ -99,6 +99,9 @@ void GameOption_Load(void)
 
 /* ---------- init / update / render ---------- */
 
+#if 0  /* DESATIVADO (27/09/2026): código só do Prex3, fora do fluxo do Exceed
+ * (LOGO/INTRO/IDLE/TITLE -> CSelect). Preservado; o bloco tem comentários
+ * internos, por isso #if 0 em vez de envolver em comentário. */
 void Gamestate_InitGameOption(void)
 {
     /* Nao sobrescreve os valores — ja foram carregados por GameOption_Load() na inicializacao */
@@ -353,3 +356,4 @@ void Gamestate_RenderGameOption(void)
         BGA_SetEventLayer(0, (cnt % 30) + 90, 36);
     }
 }
+#endif  /* DESATIVADO */

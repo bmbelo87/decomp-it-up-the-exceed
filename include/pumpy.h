@@ -112,7 +112,10 @@ typedef enum {
     STATE_GAMEPLAY_BEGIN  = 0x85,
     STATE_INTRO           = 0x90, /* Exceed: CIntro — BGA\INTRO.MOV + AUDIO\001.AUD */
     STATE_CREDIT          = 0x91, /* Exceed: CTitle — CREDIT.MOV */
+    STATE_HIGHSCORE       = 0x93, /* Exceed: CHighscore — BGA\HS.DAT + ranking da EEPROM */
     STATE_EXSELECT        = 0x92, /* Exceed: CSelect — BGA\SELECT.DAT + SELECT2.DAT + 90.DAT */
+    STATE_IR              = 0x94, /* Exceed: CInternetRanking — BGA\IR.DAT + AUDIO\IR.AUD (src/ir.c) */
+    STATE_NAMEINPUT       = 0x95, /* Exceed: CNameInput — BGA\085.DAT (src/nameinput.c) */
     STATE_EXIT            = 0xFF,
 } GameState;
 
@@ -463,6 +466,8 @@ extern int g_fontSprHD03;    // HD03.SPR
 extern int g_fontSprHD05;    // HD05.SPR
 extern int g_fontSprBT01;    // BT_MC01.SPR
 extern int g_fontSprBT02;    // BT_MC02.SPR
+extern int g_fontSprGGS;     // gg_s.spr (Exceed, lifebar single)
+extern int g_fontSprGGD;     // gg_d.spr (Exceed, lifebar double)
 extern int g_fontArrow541;
 extern int g_fontArrow542;
 extern int g_fontArrow543;
@@ -525,6 +530,7 @@ int Texture_GetWidth(int id);
 int Texture_GetHeight(int id);
 void Texture_Draw(int id, float x, float y, float scaleX, float scaleY, float alpha);
 void Texture_DrawUV(int id, float x, float y, float w, float h, float u1, float v1, float u2, float v2, float r, float g, float b, float alpha);
+void Texture_InsetUV(int texW, int texH, float* u1, float* v1, float* u2, float* v2); /* SMOOTH: meio texel para dentro */
 void Texture_Shutdown(void);
 
 typedef enum {
@@ -547,6 +553,9 @@ typedef enum {
     SND_START,      /* Exceed START.WAV     [0xA6D2EC]: confirmação da música */
     SND_TIME_LIMIT, /* Exceed TIME_LIMIT.WAV [0xA6D30C]: contador da Select <= 5 */
     SND_PUSHPANEL,  /* Exceed PUSHPANEL.WAV [0xA6D2E8]: jogador entra na Select */
+    SND_GAMESTOP,   /* Exceed GAMESTOP.WAV  [0xA6D2F0]: Stage Break (0x4152ED) */
+    SND_9_5,        /* Exceed 9-5.WAV       [0xA6D2F8]: CGrade t=158 (0x40D4DF) */
+    SND_NEXTSTAGE,  /* Exceed NEXTSTAGE.WAV [0xA6D2FC]: NEXTSTAGE (0x41517F) */
     SND_COUNT
 } SoundID;
 
@@ -649,7 +658,35 @@ void Gamestate_UpdateLogo(float dt);
 void Gamestate_UpdateIntro(float dt);
 void Gamestate_RenderIntro(void);
 unsigned Title_GetJoinedMask(void); /* intro.c — [0x568FF4] bits 0/1 */
+/* Exceed: songDB sintético montado das tabelas do exceed.exe quando não há
+ * Stage.cfg. Com ele, os IDs são hex e os arquivos saem em "%X"
+ * (STEP\%X.STX, AUDIO\%X.AUD, BGA\%X.DAT, TITLE\T%X.PNZ). */
+extern bool g_exceedSongIds;
+const char* Song_IdStr(int id);
+int Song_DataId(int id);            /* A26 -> 401, A27 -> 402 (TITLE/BGA/STEP); o .AUD fica o da própria música */
+const char* Song_DataIdStr(int id);
+bool ExSelect_IsXMode(void);
+void Attract_Idle(void);            /* Exceed CIdle: próxima tela da atração */
+extern bool g_exDemo;               /* [0x568FF4] & 0x100000: demo da atração ("-demo") */
+bool Demo_SoundOn(void);            /* EEPROM +0x7F0 */
+void Demo_End(void);
+void Gameplay_ExScoreSync(void);    /* Exceed: GOOD +100, BAD -700, MISS -1000, score >= 0 */        /* [0x568FF4] & 0x8000 */     /* "%X" com g_exceedSongIds, senão "%d" */
+void ExSelect_BuildSongDB(SongDB* db);
 void ExSelect_Enter(void);          /* exceed_select.c — CSelect */
+bool ExSelect_Run(int id, int m, int demo); /* RUN/PLAY do console: m = 0..4 (N H C D NM) ou 5 (-bt) */
+/* Roda de banners da Select, ajustável pelo /set do console (0x456E9C..0x456EC4, 0x563AC8/CC) */
+extern float g_exCamX1, g_exCamX2, g_exCamY1, g_exCamY2, g_exCamZ1, g_exCamR, g_exCamR2,
+             g_exCamR3, g_exCamTx, g_exCamTy, g_exCamP, g_exCamCy, g_exCamCy2;
+extern bool g_drawJudgeRange;       /* CPlayEngine +0x48D4A: só o /drawjudgerange mexe; o exe nunca lê */
+void Highscore_Update(float dt);
+void Highscore_Render(void);
+/* Exceed: Internet Ranking (src/ir.c) */
+void IR_RecordStage(int stage, int songIndex, const uint32_t score[2]);
+void IR_Update(float dt);
+void IR_Render(void);
+/* Exceed: entrada de nome do ranking (src/nameinput.c) */
+void NameInput_Update(float dt);
+void NameInput_Render(void);
 void ExSelect_Update(float dt);
 void ExSelect_Render(void);
 void Gamestate_UpdateMenu(float dt);

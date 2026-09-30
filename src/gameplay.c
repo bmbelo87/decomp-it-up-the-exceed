@@ -43,9 +43,32 @@ void Game_ResetAllCheats(void);
 static const int k_unitEarly[3][4] = { { 7,12,17,22}, { 5,10,15,20}, { 3, 8,13,18} };
 static const int k_unitLate [3][4] = { {12,17,22,27}, {10,15,20,25}, { 8,13,18,23} };
 
+/* ── Janelas do Exceed (exceed.exe CPlayEngine::SetJudgeZone 0x404138) ──
+ * Constantes float em 0x4492A0..0x4492E8, mesmas do src do Exceed
+ * (playengine.cpp SetJudgeZone, snapshot 2003-12-29). Única chamada em
+ * 0x4022EF: SetJudgeZone(1, BPM do 1º bloco) -> SEMPRE a tabela NORMAL,
+ * independente da dificuldade, calculada UMA vez no início da música.
+ * Zona em unidades de Y (60 por batida, PUMP_ARROW_Y):
+ *     zona = k * (BPM0 / 120.0f)   (float, sem _ftol)
+ * Teste estrito U < Y < D (Y > 0 = nota no futuro = cedo), então
+ *     tarde = |U| = 7,12,17,22   cedo = D = 8,13,18,23
+ * Y avança a BPM_atual*60/60 unidades por segundo -> segundos = zona / BPM_atual. */
+static const int k_exUnitEarly[4] = { 8, 13, 18, 23 };
+static const int k_exUnitLate [4] = { 7, 12, 17, 22 };
+static double exJudgeBpm0(void); /* BPM do 1º bloco do chart (definido após g_chart) */
+
 static void judgeWindows(int lvl, double bpm, double early[4], double late[4])
 {
     const double f = (double)0.00833333f; /* mesma constante float32 do original */
+    if (g_exceedSongIds) {
+        const float scale = (float)exJudgeBpm0() / 120.0f;
+        (void)lvl;
+        for (int j = 0; j < 4; j++) {
+            early[j] = (double)((float)k_exUnitEarly[j] * scale) / bpm;
+            late[j]  = (double)((float)k_exUnitLate [j] * scale) / bpm;
+        }
+        return;
+    }
     for (int j = 0; j < 4; j++) {
         early[j] = (double)(int)((double)k_unitEarly[lvl][j] * (bpm * f)) / bpm;
         late[j]  = (double)(int)((double)k_unitLate [lvl][j] * (bpm * f)) / bpm;
@@ -115,6 +138,7 @@ StepChart* g_chart;
 static bool g_songLoaded;
 
 static double g_songTime;
+static unsigned s_exPrev[2][3];   /* contadores GOOD/BAD/MISS já pontuados (Gameplay_ExScoreSync) */
 static double g_secondsPerRow;
 static double g_totalSongSeconds;
 static double g_chartDelay;
@@ -192,7 +216,10 @@ static void applyLife(int player, JudgeType jt)
         default:
             break;
     }
-    if (*life < 0) *life = 0;
+    /* Exceed (0x409BC2..0x40A0CD): a vida em [+0x168] nunca é limitada —
+     * pode ficar negativa e passar de 1000; só o desenho (0x40B084) faz clamp.
+     * Os únicos outros acessos são os testes "< 1" do stage break (0x402C3D..). */
+    if (!g_exceedSongIds && *life < 0) *life = 0;
     /* Clamp único no fim, como o original faz em Gameplay_ProcessJudgment:
      * testa os dois limites de uma vez depois do switch, não dentro de cada caso. */
     if (*speed < k_lifeSpeedMin[lvl]) *speed = k_lifeSpeedMin[lvl];
@@ -516,8 +543,8 @@ static bool loadChartForSong(int songId, int diffTier, const char* modeName)
     g_chart = NULL;
 
     char stxPath[MAX_PATH];
-    snprintf(stxPath, sizeof(stxPath), "%s/STEP/%d.STX",
-             g_game.currentDirectory, songId);
+    snprintf(stxPath, sizeof(stxPath), "%s/STEP/%s.STX",
+             g_game.currentDirectory, Song_DataIdStr(songId));
 
     Log_Print("GP: loading '%s' (song %d, mode=%s)\n", stxPath, songId, modeName ? modeName : "?");
 
@@ -570,6 +597,10 @@ static bool loadChartForSong(int songId, int diffTier, const char* modeName)
         g_totalSongSeconds = total;
     }
     g_autoplay = g_game.input.autoplay;
+    if (g_exDemo) {                 /* 0x402A67: 0x40B9EC(0) e (5) — autoplay nas duas metades */
+        g_autoplay = true;
+        for (int a = 0; a < 10; a++) g_autoPanel[a] = true;
+    }
 
     /* Aplica multiplicador de velocidade do Command — por player. */
     for (int _ip = 0; _ip < 2; _ip++) {
@@ -656,6 +687,14 @@ static double currentJudgeBpm(void)
             }
         }
     }
+    return bpm > 0.0 ? bpm : 120.0;
+}
+
+/* Exceed: 0x4022E5 passa o BPM do primeiro bloco; o recálculo por troca
+ * de BPM está comentado no original (playengine.cpp:2386). */
+static double exJudgeBpm0(void)
+{
+    double bpm = (g_chart && g_chart->segmentCount > 0) ? g_chart->segments[0].bpm : 120.0;
     return bpm > 0.0 ? bpm : 120.0;
 }
 
@@ -991,9 +1030,12 @@ static bool holdHasRowsAhead(int p, int panel, bool isHD, bool isDN)
  * PUMPY.EXE (verificado emulando 0x40e330): nos modos Normal/Hard/Crazy/Division a linha só é
  * consumida quando delta <= 0 (0x40ed8a, segunda metade); em HalfDouble/Double/Nightmare
  * (flags 0x80/0x200/0x800) já entra na janela CEDO do Perfect (0x40e3e6, primeira metade),
- * então soltar poucos ms antes da cauda ainda vale. */
+ * então soltar poucos ms antes da cauda ainda vale.
+ * exceed.exe NÃO tem essa antecipação: nos dois caminhos (single 0x4086a8, double 0x408a79)
+ * o botão segurado ([0x568FF0]) só gera o aperto quando Y <= 0.0 (double em 0x449450). */
 static double holdLeadSec(bool earlyFamily)
 {
+    if (g_exceedSongIds) return 0.0;
     if (!earlyFamily) return 0.0;
     int lvl = g_game.optionDifficulty;
     if (lvl < 0) lvl = 0;
@@ -1653,8 +1695,15 @@ void Gameplay_Start(int songId)
 {
     g_stageBreakFreezeTimer = -1.0f;
     memset(&g_game.stats, 0, sizeof(g_game.stats));
+    memset(s_exPrev, 0, sizeof(s_exPrev));
     g_game.stats.life[0]      = 224; /* baseline visual: 11+2/3 de 26 retangulos ao inicio da musica. */
     g_game.stats.life[1]      = 224;
+    if (g_exceedSongIds) {
+        /* exceed.exe 0x4026D6 / 0x4026EE: [player+0x168] = 500 (0x1F4) para
+         * cada jogador ativo — o mesmo m_Gauge = 500 do playengine.cpp. */
+        g_game.stats.life[0] = LIFE_INITIAL;
+        g_game.stats.life[1] = LIFE_INITIAL;
+    }
     /* lifeSpeed inicial varia por nível (GameInit 0x00411381):
      * easy=500, normal=300, hard=100. Antes era fixo em 500, o perfil do easy. */
     g_game.stats.lifeSpeed[0] = k_lifeSpeedInit[lifeLevel()];
@@ -1727,6 +1776,28 @@ void Gameplay_Start(int songId)
     Log_Print("Gameplay: started song %d (audio=%d, %u ms)\n", songId, (int)g_hasAudio, BGM_GetDurationMs());
 }
 
+/* Exceed (exceed.exe 0x409BC2..0x40A0CD): PERFECT e GREAT já batem com o
+ * código herdado (+1000/+500, +1000 com combo >= 4). O Exceed ainda soma
+ * GOOD +100 (0x409DAB), BAD -700 (0x409C1A) e MISS -1000 (0x409CAE), e o
+ * score nunca fica negativo (0x409DB6). Em vez de mexer em cada ponto de
+ * julgamento, aplica a diferença dos contadores desde a última chamada
+ * (a ordem dentro de um mesmo quadro pode diferir do original no clamp). */
+void Gameplay_ExScoreSync(void)
+{
+    if (!g_exceedSongIds) return;
+    for (int p = 0; p < 2; p++) {
+        unsigned cur[3] = { g_game.stats.goodCount[p], g_game.stats.badCount[p],
+                            g_game.stats.missCount[p] };
+        long sc = (long)g_game.stats.score[p];
+        sc += 100L * (long)(cur[0] - s_exPrev[p][0]);
+        for (unsigned k = s_exPrev[p][1]; k < cur[1]; k++) { sc -= 700;  if (sc < 0) sc = 0; }
+        for (unsigned k = s_exPrev[p][2]; k < cur[2]; k++) { sc -= 1000; if (sc < 0) sc = 0; }
+        if (sc < 0) sc = 0;
+        g_game.stats.score[p] = (unsigned)sc;
+        for (int i = 0; i < 3; i++) s_exPrev[p][i] = cur[i];
+    }
+}
+
 void Gameplay_Exit(void)
 {
     BGM_Stop();
@@ -1747,6 +1818,14 @@ void Gameplay_Update(float dt)
     if (g_game.state != STATE_GAMEPLAY) return;
     if (!g_songLoaded) return;
     if (dt > 0.05f) dt = 0.05f;
+
+    Gameplay_ExScoreSync();
+
+    /* Demo: 0x402B82 — crédito ou 35 s -> IDLE */
+    if (g_exDemo && (Coin_HasCredit() || g_songTime >= 35.0)) {
+        Demo_End();
+        return;
+    }
 
     /* Stage Break: freeze de 0.5s depois do trigger, antes de mostrar 083.DAT */
     if (g_stageBreakFreezeTimer >= 0.0f) {
@@ -2082,6 +2161,180 @@ void Gameplay_Update(float dt)
     }
 }
 
+/* 0x4240A4: tile na posição natural do .spr, cor corrente */
+static void exLifeTile(int idx, float r, float g, float b, float a)
+{
+    if (idx < 0 || idx >= g_game.sprTileCount) return;
+    SPRTileDef* t = &g_game.sprTiles[idx];
+    if (t->texId < 0) return;
+    int tw = Texture_GetWidth(t->texId);  if (tw <= 0) tw = 256;
+    int th = Texture_GetHeight(t->texId); if (th <= 0) th = 256;
+    Texture_DrawUV(t->texId, (float)t->srcX, (float)t->srcY,
+                   (float)t->srcW, (float)t->srcH,
+                   t->u1 * (float)tw, t->v1 * (float)th,
+                   t->u2 * (float)tw, t->v2 * (float)th, r, g, b, a);
+}
+
+/* exceed.exe 0x401000 (max_combo_num) / 0x4010FC (max_combo_mark): um quadro de
+ * 40x48 da textura do BT_MC (256x256), a partir de V = 163/256. Dígito n na
+ * grade de 6 colunas; marca 0 '<', 1 '=', 2 '>' (a 2 é a 1 espelhada). */
+static void exBattleGlyph(int texId, float u1, float v1, float u2, float v2)
+{
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, g_game.textures[texId].id);
+    glBegin(GL_QUADS);
+    glTexCoord2f(u1, v1); glVertex2f(0.0f, 48.0f);
+    glTexCoord2f(u1, v2); glVertex2f(0.0f, 0.0f);
+    glTexCoord2f(u2, v2); glVertex2f(40.0f, 0.0f);
+    glTexCoord2f(u2, v1); glVertex2f(40.0f, 48.0f);
+    glEnd();
+}
+
+/* exceed.exe 0x401240 (max_combo_draw): 1000/2000/3000 = marca < = >, senão 3 dígitos
+ * da direita para a esquerda, 34 px entre eles. */
+static void exBattleNumber(int texId, int combo)
+{
+    const float tw = 40.0f / 256.0f, th = 48.0f / 256.0f, y0 = 163.0f / 256.0f;
+    if (combo == 1000 || combo == 2000 || combo == 3000) {
+        int n = combo / 1000 - 1;
+        float u1 = (n == 0) ? 4 * tw : 5 * tw;
+        float u2 = (n == 2) ? u1 - tw : u1 + tw;
+        glTranslatef(-34.0f, 0.0f, 0.0f);
+        exBattleGlyph(texId, u1, th + y0, u2, th + y0 + th);
+        return;
+    }
+    for (int i = 0; i < 3; i++) {
+        int d = combo % 10;
+        float u1 = (float)(d % 6) * tw, v1 = (float)(d / 6) * th + y0;
+        exBattleGlyph(texId, u1, v1, u1 + tw, v1 + th);
+        combo /= 10;
+        glTranslatef(-34.0f, 0.0f, 0.0f);
+    }
+}
+
+/* exceed.exe 0x40329D..0x403437 (playengine.cpp 1151): no BATTLE, BT_MC01.SPR por
+ * cima e o max combo de cada jogador no centro, com a marca de quem vence no meio.
+ * blink = pulso da batida (o mesmo das setas-base); Y = 70 ± 6·blink. */
+static void exBattleDraw(float blink)
+{
+    if (g_fontSprBT01 < 0) return;
+    int bt1 = (g_fontSprBT02 > g_fontSprBT01) ? g_fontSprBT02 : g_game.sprTileCount;
+    for (int i = g_fontSprBT01; i < bt1; i++)
+        exLifeTile(i, 1, 1, 1, 1);
+
+    int texId = g_game.sprTiles[g_fontSprBT01].texId;
+    if (texId < 0 || texId >= MAX_TEXTURES || !g_game.textures[texId].inUse) return;
+    unsigned c0 = g_game.stats.maxCombo[0], c1 = g_game.stats.maxCombo[1];
+
+    glColor4f(1, 1, 1, 1);
+    glPushMatrix();
+    glTranslatef(256.0f, 70.0f + blink * 6.0f, 0.0f);   /* 320 - (42+22) */
+    exBattleNumber(texId, (int)c0);
+    glPopMatrix();
+
+    glPushMatrix();
+    glTranslatef(337.0f, 70.0f - blink * 6.0f, 0.0f);   /* 320 + 17 */
+    exBattleNumber(texId, c0 < c1 ? 1000 : c0 == c1 ? 2000 : 3000);
+    glPopMatrix();
+
+    glPushMatrix();
+    glTranslatef(408.0f, 70.0f + blink * 6.0f, 0.0f);   /* 320 + (66+22) */
+    exBattleNumber(texId, (int)c1);
+    glPopMatrix();
+    glDisable(GL_TEXTURE_2D);
+}
+
+/* exceed.exe 0x40B084: lifebar do Exceed (gg_s.spr / gg_d.spr + GG.png).
+ * beat = 1.0 no início da batida caindo a 0.0 (índice (1-beat)*59 na
+ * tabela 0x4541A0, a mesma do Prex3). Coordenadas do original em Y-UP,
+ * que é o espaço do GL do projeto: entram direto. */
+static void exLifebarDraw(int p, float beat, bool dbl)
+{
+    static const float k_tbl[60] = {                     /* 0x4541A0 */
+        1,1,1,1,1,1,1,1,1,1, .6f,.6f,.6f,.6f,.6f,.6f,.6f,.6f,.6f,.6f,
+        .3f,.3f,.3f,.3f,.3f,.3f,.3f,.3f,.3f,.3f, .1f,.1f,.1f,.1f,.1f,.1f,.1f,.1f,.1f,.1f,
+        0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0 };
+    int spr = dbl ? g_fontSprGGD : g_fontSprGGS;
+    if (spr < 0) return;
+    int life = g_game.stats.life[p];
+
+    int ti = (int)((1.0f - beat) * 59.0f);
+    if (ti < 0) ti = 0;
+    if (ti > 59) ti = 59;
+    float v = (float)life / 1000.0f + (1.0f - k_tbl[ti]) / -10.0f;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    int n7 = (int)(v * 33.0f) * 7;            /* edi */
+
+    glPushMatrix();
+    if (!dbl && p != 0)
+        glTranslatef(320.0f, 0.0f, 0.0f);     /* 0x40B183 */
+
+    exLifeTile(spr + 4, 1, 1, 1, 1);          /* fundo (ST01) */
+    exLifeTile(spr + 1, 1, 1, 1, 1);          /* moldura */
+
+    /* Preenchimento: quad + ponta triangular, textura do tile 0 (GG) */
+    int texId = g_game.sprTiles[spr].texId;
+    if (texId >= 0 && texId < MAX_TEXTURES && g_game.textures[texId].inUse) {
+        float n14 = (float)(n7 * 2);
+        float f7  = (float)n7;
+        float uL = 45.0f / 512.0f;
+        float uR = (45.0f + n14) / 512.0f;
+        float uT = ((7.05f + f7) * 2.0f + 45.0f) / 512.0f;
+        float x0, xR, xT;
+        if (dbl) {                            /* 0x40B60A: x = 85 + 2.05*7n */
+            x0 = 85.0f; xR = 2.05f * f7 + 85.0f; xT = (7.05f + f7) * 2.05f + 85.0f;
+        } else {                              /* 0x40B202: x = 47 + 7n */
+            x0 = 47.0f; xR = 47.0f + f7; xT = 54.05f + f7;
+        }
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, g_game.textures[texId].id);
+        glColor4f(1, 1, 1, 1);
+        glBegin(GL_QUADS);
+        glTexCoord2f(uL, 0.40625f); glVertex2f(x0, 471.0f);
+        glTexCoord2f(uR, 0.40625f); glVertex2f(xR, 471.0f);
+        glTexCoord2f(uR, 0.65625f); glVertex2f(xR, 446.0f);
+        glTexCoord2f(uL, 0.65625f); glVertex2f(x0, 446.0f);
+        glEnd();
+        glBegin(GL_TRIANGLES);
+        glTexCoord2f(uR, 0.40625f); glVertex2f(xR, 471.0f);
+        glTexCoord2f(uT, 0.40625f); glVertex2f(xT, 471.0f);
+        glTexCoord2f(uR, 0.65625f); glVertex2f(xR, 446.0f);
+        glEnd();
+    }
+
+    /* 0x40B3AC: vida real (sem o pulso) em 0..31 */
+    float L = (float)life / 1000.0f;
+    if (L < 0.0f) L = 0.0f;
+    if (L > 1.0f) L = 1.0f;
+    int m = (int)(L * 33.0f);
+    if (m < 0) m = 0;
+    if (m >= 32) m = 31;
+    float cx = (float)m * (dbl ? 14.12f : 6.95f);
+
+    /* Brilho (tile 2): vermelho com m <= 10, pisca com o contador
+     * [0x4635E4+p*4] & 1 (HIPÓTESE: contador de quadros) */
+    float gR = 1.0f, gG = (m <= 10) ? 0.0f : 1.0f, gB = gG;
+    bool blink = (g_game.frameCounter & 1) != 0;
+    if ((L >= 1.0f || m <= 10) && blink)
+        exLifeTile(spr + 2, gR, gG, gB, 1.0f);
+
+    /* Cursor (tile 3) e o mesmo cursor ampliado 1+beat/4, alpha = beat */
+    float pivX = dbl ? 101.0f : 52.0f;
+    glPushMatrix();
+    glTranslatef(cx, 0.0f, 0.0f);
+    exLifeTile(spr + 3, 1, 1, 1, 1);
+    glTranslatef(pivX, 457.0f, 0.0f);
+    float s = beat / 4.0f + 1.0f;
+    glScalef(s, s, 1.0f);
+    glTranslatef(-pivX, -457.0f, 0.0f);
+    exLifeTile(spr + 3, 1, 1, 1, beat);
+    glPopMatrix();
+
+    glPopMatrix();
+    glColor4f(1, 1, 1, 1);
+}
+
 void Gameplay_Render(void)
 {
     if (g_game.state != STATE_GAMEPLAY) return;
@@ -2387,6 +2640,21 @@ void Gameplay_Render(void)
         static const int kHDTailTile[6] = {21, 19, 15, 13, 17, 21};
         static const float kHDBodyOffX[6] = {0.0f, 3.0f, 4.0f, -4.0f, -3.0f, 0.0f};
 
+        /* X-MODE (exceed.exe 0x40648E / 0x40658B): com [0x568FF4] & 0x8000 a
+         * nota ganha Translate(d*speed/±1000) em X, onde d*speed/1000 é a
+         * mesma distância que a afasta do receptor (y = 378 - d*speed/1000).
+         * +1000 para o jogador 0, -1000 para o outro ([ebx+8] = 1º argumento
+         * de 0x406190). Resultado: a nota chega na diagonal de 45°. */
+        /* Double: metade esquerda (colunas 0..4) vem da direita e a direita
+         * (5..9) vem da esquerda, formando um X (observado pelo usuário no
+         * original; o código passa o sinal pelo 1º argumento de 0x406190). */
+        float xmS = 0.0f;
+        if (g_exceedSongIds && ExSelect_IsXMode()) xmS = (p == 0) ? 1.0f : -1.0f;
+        float xmY0 = (float)(receptorY + rh2 / 2);
+        #define XM_S(pn) ((isDoubleOrNightmare && (pn) >= 5) ? -xmS : xmS)
+        #define XM_DX(yy) (xmS * ((yy) - xmY0))
+        #define XM_DXP(pn, yy) (XM_S(pn) * ((yy) - xmY0))
+
         // Pass 0: Hold bodies (esticados entre runs de NT_HOLD_B)
         if (g_fontArrowETC >= 0) {
             for (int panel = 0; panel < panelCount; panel++)
@@ -2479,13 +2747,62 @@ void Gameplay_Render(void)
                             float u2px = bt->u2 * (float)btW;
                             float vC1 = (bt->v1 + (bt->v2 - bt->v1) * 0.25f) * (float)btH;
                             float vC2 = (bt->v1 + (bt->v2 - bt->v1) * 0.75f) * (float)btH;
-                            Texture_DrawUV(bt->texId, cx - sw / 2.0f, y1, sw, totalH,
+                            /* X-MODE: o original (0x404DFF..0x405165) desenha corpo e
+                             * ponta de uma vez, dentro da translação da linha da
+                             * CABEÇA — peça vertical que segue o X da cabeça (y1). */
+                            Texture_DrawUV(bt->texId, cx - sw / 2.0f + XM_DXP(panel, y1), y1, sw, totalH,
                                            u1px, vC1, u2px, vC2, 1.0f, 1.0f, 1.0f, bodyAlpha);
                         }
                     }
                     ri = endRi - 1;
                 }
             }
+        }
+
+        /* Exceed — hold segurado, olhando a próxima linha não vazia à frente:
+         *   HOLD_B: o corpo já sai do receptor no Pass 0; falta a cabeça presa no
+         *           receptor (0x4053D5..0x405419: Translate(0, CurY*speed/1000) e
+         *           DrawPic da seta), desenhada depois do Pass 2.
+         *   HOLD_T: só sobrou a ponta (linha END com a anterior vazia,
+         *           0x404CAB..0x404D81). O original liga o receptor à ponta com o
+         *           corpo (y_interp + 30 + CurY*speed/1000 .. 55); aqui os corpos
+         *           consumidos já foram apagados por clearPanel, então sem este
+         *           bloco sobrava um buraco entre o receptor e a ponta. */
+        bool exHeldHead[MAX_PANELS] = { false };
+        if (g_exceedSongIds && g_fontArrowETC >= 0 && !g_game.cmdNonStep[p]) {
+            #define EX_PV(r, pn) (isHalfDouble ? getNoteHD(&g_chart->rows[r], pn) \
+                               : (isDoubleOrNightmare ? getDNPanelValue(&g_chart->rows[r], pn) \
+                               : getPanelValue(&g_chart->rows[r], pn, p)))
+            for (int panel = 0; panel < panelCount; panel++) {
+                int hr = g_holdRows[p][panel];
+                if (hr < 0) continue;
+                int tailRi = -1;
+                for (int ri = hr + 1; ri < (int)g_chart->rowCount; ri++) {
+                    uint8_t v = EX_PV(ri, panel);
+                    if (!v) continue;
+                    if (v == NT_HOLD_B) exHeldHead[panel] = true;
+                    else if (v == NT_HOLD_T) tailRi = ri;
+                    break;
+                }
+                if (tailRi < 0) continue;
+                float vt = (tailRi < g_visualRowCount && g_visualRow) ? (float)g_visualRow[tailRi] : (float)tailRi;
+                float y1 = (float)(receptorY + rh2 / 2);
+                float y2 = (float)(receptorY + rh2 / 2 + (vt - visualScrollRow) * pPixelsPerRow);
+                if (y2 <= y1) continue;
+                int arrowIdx = isDoubleOrNightmare ? (panel % 5) : panel;
+                int idx = g_fontArrowETC + (isHalfDouble ? kHDBodyTile[panel] : kBodyTile[arrowIdx]);
+                SPRTileDef* bt = &g_game.sprTiles[idx];
+                float sw = (float)bt->srcW;
+                float offX = isHalfDouble ? kHDBodyOffX[panel] : kBodyOffX[arrowIdx];
+                int btW = Texture_GetWidth(bt->texId); if (btW <= 0) btW = 256;
+                int btH = Texture_GetHeight(bt->texId); if (btH <= 0) btH = 256;
+                /* mesma faixa de UV do Pass 0, para o corpo não mudar de cara no fim */
+                float vC1 = (bt->v1 + (bt->v2 - bt->v1) * 0.25f) * (float)btH;
+                float vC2 = (bt->v1 + (bt->v2 - bt->v1) * 0.75f) * (float)btH;
+                Texture_DrawUV(bt->texId, posX[panel] + offX + XM_DXP(panel, y1), y1, sw, y2 - y1,
+                               bt->u1 * (float)btW, vC1, bt->u2 * (float)btW, vC2, 1.0f, 1.0f, 1.0f, 1.0f);
+            }
+            #undef EX_PV
         }
 
         // Pass 1: Hold tails
@@ -2521,7 +2838,26 @@ void Gameplay_Render(void)
                     float fade = (y - 122.0f) / 84.0f;
                     tailAlpha = fade < 0.0f ? 0.0f : (fade > 1.0f ? 1.0f : fade);
                 }
-                Sprite_DrawTileUV(idx, posX[panel] + sw / 2.0f, y, sw, sh, tailAlpha);
+                /* X-MODE: a ponta sai na mesma chamada do corpo, com o X da
+                 * cabeça do hold (volta até o NT_HOLD_H do mesmo painel). */
+                float tailDX = 0.0f;
+                if (xmS != 0.0f) {
+                    float headY = y;
+                    for (int hr = ri - 1; hr >= 0; hr--) {
+                        uint8_t hv = isHalfDouble ? getNoteHD(&g_chart->rows[hr], panel)
+                                   : (isDoubleOrNightmare ? getDNPanelValue(&g_chart->rows[hr], panel)
+                                   : getPanelValue(&g_chart->rows[hr], panel, p));
+                        if (hv == NT_HOLD_H) {
+                            float vh = (hr < g_visualRowCount && g_visualRow) ? (float)g_visualRow[hr] : (float)hr;
+                            headY = (float)(receptorY + rh2 / 2 + (vh - visualScrollRow) * pPixelsPerRow);
+                            break;
+                        }
+                        if (hv != NT_HOLD_B) break;
+                    }
+                    if (g_holdRows[p][panel] >= 0 && headY < xmY0) headY = xmY0;  /* segurado */
+                    tailDX = XM_DXP(panel, headY);
+                }
+                Sprite_DrawTileUV(idx, posX[panel] + sw / 2.0f + tailDX, y, sw, sh, tailAlpha);
             }
         }
         // Pass 2: Taps/HoldHeads
@@ -2582,10 +2918,33 @@ void Gameplay_Render(void)
                         float fade = (y - 122.0f) / 84.0f;
                         noteAlpha = fade < 0.0f ? 0.0f : (fade > 1.0f ? 1.0f : fade);
                     }
-                    Sprite_DrawTileUV(aidx, posX[panel] + sw / 2.0f, y, sw, sh, noteAlpha);
+                    Sprite_DrawTileUV(aidx, posX[panel] + sw / 2.0f + XM_DXP(panel, y), y, sw, sh, noteAlpha);
                 }
             }
         }
+        /* Exceed 0x4053D5..0x405419: cabeça do hold segurado redesenhada no
+         * receptor, por cima do corpo (a linha da cabeça já foi apagada). */
+        for (int panel = 0; panel < panelCount; panel++) {
+            if (!exHeldHead[panel]) continue;
+            int arrowIdx = isDoubleOrNightmare ? (panel % 5) : panel;
+            int arrowGroup = isHalfDouble
+                ? ((panel == 0 || panel == 5) ? 2 : (panel == 1) ? 3 : (panel == 2) ? 4 : (panel == 3) ? 0 : 1)
+                : arrowIdx;
+            int arrowSpr = (arrowGroup == 0) ? g_fontArrow542 :
+                           (arrowGroup == 1) ? g_fontArrow541 :
+                           (arrowGroup == 2) ? g_fontArrow545 :
+                           (arrowGroup == 3) ? g_fontArrow543 :
+                           (arrowGroup == 4) ? g_fontArrow544 : -1;
+            if (arrowSpr < 0) continue;
+            int aidx = arrowSpr + arrowAnimFrame();
+            float sw = (float)g_game.sprTiles[aidx].srcW;
+            float sh = (float)g_game.sprTiles[aidx].srcH;
+            float y = (float)(receptorY + rh2 / 2);
+            Sprite_DrawTileUV(aidx, posX[panel] + sw / 2.0f + XM_DXP(panel, y), y, sw, sh, 1.0f);
+        }
+        #undef XM_DX
+        #undef XM_DXP
+        #undef XM_S
 
         int centerY = g_game.screenHeight / 2;
     int receptorY = 38; // Same as in rendering loop
@@ -2657,12 +3016,26 @@ void Gameplay_Render(void)
         else if (g_game.stageCount == 2) stageSpr = g_fontSprM01;
         else if (g_game.stageCount == 1) stageSpr = g_fontSprM02;
         else if (g_game.stageCount == 0) stageSpr = g_fontSprM04;
+        if (g_exceedSongIds) {
+            /* exceed.exe 0x40C9D7: contador [0x568FF8] 0 -> m01, 1 -> m02,
+             * 2 -> m03, 3+ -> m04 (extra). Aqui: stage = 2 - stageCount;
+             * extra = isBonusSong. O caso [+0x7EC] == 1 (m04 no stage 0)
+             * não foi portado: flag não identificada. */
+            if (g_game.isBonusSong)          stageSpr = g_fontSprM04;
+            else if (g_game.stageCount == 2) stageSpr = g_fontSprM01;
+            else if (g_game.stageCount == 1) stageSpr = g_fontSprM02;
+            else                             stageSpr = g_fontSprM03;
+        }
         if (stageSpr >= 0 && g_game.sprTileCount > stageSpr) {
             float sx = (float)g_game.sprTiles[stageSpr].srcX;
             float sy = (float)g_game.sprTiles[stageSpr].srcY;
             float sw = (float)g_game.sprTiles[stageSpr].srcW;
             float sh = (float)g_game.sprTiles[stageSpr].srcH;
-            if (isHalfDouble && sprLifeBord >= 0) {
+            if (g_exceedSongIds) {
+                /* exceed.exe 0x40C9B9: com [0x568FF4] & 0xA80 (double) faz
+                 * Translate(-283, 0, 0) antes do mXX.spr (x=291 -> 8). */
+                if (isDoubleOrNightmare) sx -= 283.0f;
+            } else if (isHalfDouble && sprLifeBord >= 0) {
                 sx = (float)g_game.sprTiles[sprLifeBord].srcX - sw - 10.0f;
             } else if (isDoubleOrNightmare && g_fontSprW04 >= 0) {
                 sx = (float)g_game.sprTiles[g_fontSprW04].srcX - sw - 10.0f;
@@ -2832,7 +3205,35 @@ void Gameplay_Render(void)
     }  // end for p
 
     // Life bars (03/04/05 ou W03/W04/W05) — renderizadas DEPOIS de todos os players
-    if (isDoubleOrNightmare) {
+    if (g_exceedSongIds && g_fontSprGGS >= 0) {
+        /* Exceed: 0x40B084, chamada com (p*5, beat). Double (flags 0xA80 em
+         * [0x568FF4], aqui aproximado pelo modo do projeto) usa gg_d. */
+        float beat = 1.0f;
+        if (g_chart && g_songLoaded && (float)g_songTime > 0.1f) {
+            float curBpm = (float)g_chart->segments[0].bpm;
+            double acc = g_chartDelay;
+            for (int s = 0; s < g_chart->segmentCount; s++) {
+                double segDur = g_chart->segments[s].rowCount * getSegmentSpr(s) + getSegmentDelay(s);
+                if (g_songTime < acc + segDur || s == g_chart->segmentCount - 1) {
+                    curBpm = (float)g_chart->segments[s].bpm;
+                    break;
+                }
+                acc += segDur;
+            }
+            if (curBpm > 0.0f) {
+                float period = 60.0f / curBpm;
+                beat = 1.0f - fmodf((float)g_songTime, period) / period;
+            }
+        }
+        if (isDoubleOrNightmare && g_fontSprGGD >= 0) {
+            exLifebarDraw(0, beat, true);
+        } else {
+            for (int p = pRend0; p < pRend1; p++)
+                exLifebarDraw(p, beat, false);
+        }
+        if (g_game.isBattleMode && !isDoubleOrNightmare)
+            exBattleDraw(beat);
+    } else if (isDoubleOrNightmare) {
         /* DN lifebar: mesma lógica de pulse BPM + glow que single/halfdouble.
          * W04 = única sprite de fill que cresce da ESQUERDA proporcional à vida.
          * Ordem: fill → glow → border (igual single mode). */
@@ -3289,6 +3690,23 @@ void Gameplay_Render(void)
         glPopAttrib();
         glMatrixMode(GL_PROJECTION); glPopMatrix();
         glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    }
+
+    /* Demo: 0x40CA41 — Color3f(1, 1, 0.2), tile 0x15 do arrow542.sp2 em
+     * Translate(120, 20) e +400. Coordenadas do SP2 em Y-UP local. */
+    if (g_exDemo && g_fontArrow542 >= 0 && g_fontArrow542 + 0x15 < g_game.sprTileCount) {
+        SPRTileDef* dt2 = &g_game.sprTiles[g_fontArrow542 + 0x15];
+        if (dt2->texId >= 0) {
+            int tw = Texture_GetWidth(dt2->texId);  if (tw <= 0) tw = 256;
+            int th = Texture_GetHeight(dt2->texId); if (th <= 0) th = 256;
+            for (int k = 0; k < 2; k++) {
+                float xUp = 120.0f + 400.0f * (float)k + (float)dt2->srcX;
+                float yTopDown = 480.0f - (20.0f + (float)dt2->srcY + (float)dt2->srcH);
+                Texture_DrawUV(dt2->texId, xUp, yTopDown, (float)dt2->srcW, (float)dt2->srcH,
+                               dt2->u1 * tw, dt2->v1 * th, dt2->u2 * tw, dt2->v2 * th,
+                               1.0f, 1.0f, 0.2f, 1.0f);
+            }
+        }
     }
 }
 

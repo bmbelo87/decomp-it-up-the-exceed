@@ -1,6 +1,12 @@
 #include "pumpy.h"
 #include <string.h>
 
+bool g_cdLoaded = false;   /* mantido fora do #if 0: resource.c:1398 */
+
+#if 0  /* DESATIVADO (27/09/2026): código só do Prex3, fora do fluxo do Exceed
+ * (LOGO/INTRO/IDLE/TITLE -> CSelect). Preservado; o bloco tem comentários
+ * internos, por isso #if 0 em vez de envolver em comentário. */
+
 /* ── Command detection ──────────────────────────────────────────────────────
  * Buffer5 (5-botões): velocidade e Vanish/NonStep
  *   Speed:   UL UR UL UR CN → x1→x2→x3→x4→RV→x1
@@ -1607,3 +1613,4 @@ void Gamestate_RenderSongSelect(void) {
         }
     }
 }
+#endif  /* DESATIVADO */

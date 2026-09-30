@@ -21,7 +21,8 @@ void Gamestate_UpdateWarning(float dt) {
         break;
     case STATE_WARNING_ANIM:
         if (g_game.bgaFrame >= g_game.bgaMaxFrame && g_game.stateFrame > 60)
-            Game_ChangeState(STATE_LOGO_ENTER);
+            Attract_Idle();     /* CRegionWarning: fim -> IDLE (0x413394), que abre o LOGO */
+            /* era: Game_ChangeState(STATE_LOGO_ENTER); */
         break;
     default:
         break;

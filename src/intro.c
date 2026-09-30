@@ -13,6 +13,83 @@
 static unsigned g_titleJoined;   /* [0x568FF4]: bit0 = P1 entrou, bit1 = P2 */
 static int      g_titleFade;     /* [CTitle+0x1C] */
 
+/* exceed.exe CIdle (vtable 0x1282BC8, "Idle 루프입니다. 크레딧이 없는 상태."):
+ * Begin 0x4130F4 para todos os WAVE; 0x41311C escolhe a próxima tela pelo
+ * contador [CIdle+4] (começa em 0, +1 a cada entrada):
+ *   % 4 == 0 -> LOGO, 1 -> INTRO, 2 -> HIGHSCORE, 3 -> demo
+ *   ("RUN A%02d -h -demo", 0x41926C).
+ * Toda tela da atração vai para IDLE ao terminar (0x413394) e para TITLE
+ * quando há crédito (0x41FE94). */
+static int g_idleCount;         /* [CIdle+4] */
+static int g_demoCount = -1;    /* [0x455100] */
+static bool g_demoSound = true; /* EEPROM +0x7F0 (0x40265B) */
+bool g_exDemo;
+
+bool Demo_SoundOn(void) { return g_demoSound; }
+
+/* 0x41315A + 0x41926C: n = contador % 25 + 1, pulando a 3 (A03 é oculta);
+ * "RUN A%02d -h -demo". O -demo (0x401CE0) entra com os dois jogadores em
+ * autoplay e [0x568FF4] = 0x100533. */
+static bool Demo_Start(void) {
+    g_demoCount++;
+    int n = g_demoCount % 25 + 1;
+    if (n == 3) {
+        g_demoCount++;
+        n = g_demoCount % 25 + 1;
+    }
+    char buf[8];
+    snprintf(buf, sizeof(buf), "A%02d", n);
+    int id = (int)strtol(buf, NULL, 16);
+
+    Menu_ResetState();
+    g_game.selectedSongIndex = Song_FindByID(&g_game.songDB, id);
+    g_game.selectedModeIndex = Song_FindMode(&g_game.songDB, "HARD");
+    if (g_game.selectedSongIndex < 0 || g_game.selectedModeIndex < 0) {
+        Log_Print("DEMO: música %s/HARD não encontrada\n", buf);
+        return false;
+    }
+    g_game.activePlayerMask = 3;
+    g_game.isBattleMode = false;
+    for (int p = 0; p < 2; p++) {
+        g_game.cmdSpeedMult[p] = 1;
+        g_game.cmdRandomVelocity[p] = false;
+    }
+    /* Opção da EEPROM: som na demo */
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%s/eeprom.bin", g_game.currentDirectory);
+    FILE* f = fopen(path, "rb");
+    if (f) {
+        uint8_t b = 1;
+        if (fseek(f, 0x7F0, SEEK_SET) == 0 && fread(&b, 1, 1, f) == 1) g_demoSound = (b != 0);
+        fclose(f);
+    }
+    Log_Print("DEMO: RUN %s -h -demo (som %d)\n", buf, g_demoSound);
+    g_exDemo = true;
+    Loading_Enter(id);
+    return true;
+}
+
+/* 0x402B82: com crédito ou 35 s de música ([+0x17C38] >= 35000) -> IDLE */
+void Demo_End(void) {
+    g_exDemo = false;
+    Gameplay_Exit();
+    Movie_Close();
+    Resource_ClearBGA();
+    Attract_Idle();
+}
+
+void Attract_Idle(void) {
+    Audio_StopAll();            /* 0x4130F9..0x41310F */
+    for (int guard = 0; guard < 4; guard++) {
+        switch (g_idleCount++ & 3) {
+        case 0: Game_ChangeState(STATE_LOGO_ENTER); return;
+        case 1: Game_ChangeState(STATE_INTRO);      return;
+        case 2: Game_ChangeState(STATE_HIGHSCORE);  return;
+        case 3: if (Demo_Start()) return; break;
+        }
+    }
+}
+
 /* [0x568FF4] bits 0/1: quem entrou no CREDIT (lido pela Select) */
 unsigned Title_GetJoinedMask(void) { return g_titleJoined; }
 
@@ -33,13 +110,22 @@ void Gamestate_UpdateIntro(float dt) {
             if (BGM_LoadAUDDirect(aud)) BGM_Play(false);
         }
         Movie_Update(dt);
+        /* 0x4132F0: com crédito vai para TITLE */
+        if (Coin_HasCredit()) {
+            Movie_Close();
+            Game_ChangeState(STATE_CREDIT);
+            break;
+        }
+        /* Hipótese antiga (CENTER pulava o INTRO), não existe no original:
         if (g_game.stateFrame > 1 &&
             (Movie_HasEnded() || !Movie_IsOpen() ||
-             Input_IsPadHit(0, PAD_C) || Input_IsPadHit(1, PAD_C))) {
+             Input_IsPadHit(0, PAD_C) || Input_IsPadHit(1, PAD_C))) { */
+        if (g_game.stateFrame > 1 && (Movie_HasEnded() || !Movie_IsOpen())) {
             Log_Print("INTRO: fim (frame %d, ended=%d open=%d)\n", g_game.stateFrame,
                       Movie_HasEnded(), Movie_IsOpen());
             Movie_Close();
-            Game_ChangeState(STATE_CREDIT);
+            /* Game_ChangeState(STATE_CREDIT); */
+            Attract_Idle();     /* fim do vídeo -> IDLE (0x413394) */
         }
         break;
     case STATE_CREDIT:
@@ -79,6 +165,9 @@ void Gamestate_UpdateIntro(float dt) {
             if (g_titleFade > 60) {
                 Movie_Close();
                 /* Game_ChangeState(STATE_SONG_SELECT); */  /* select do Prex3 (099.DAT) */
+                /* Contagem de estágios do projeto (3 + bônus, regra do Prex3).
+                 * HIPÓTESE para o Exceed: ainda não conferido no exceed.exe. */
+                Menu_ResetState();
                 Game_ChangeState(STATE_EXSELECT);
                 return;
             }

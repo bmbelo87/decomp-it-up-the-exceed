@@ -1,4 +1,5 @@
 #include "pumpy.h"
+#include "movie.h"
 
 #define LOADING_DURATION_MS 3550
 #define LOADING_FADE_MS 48
@@ -32,7 +33,7 @@ void Loading_Enter(int songId) {
     Resource_ClearBGA();
 
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/TITLE/T%d.pnz", g_game.currentDirectory, songId);
+    snprintf(path, sizeof(path), "%s/TITLE/T%s.pnz", g_game.currentDirectory, Song_DataIdStr(songId));
     Log_Print("Loading: loading PNZ '%s'\n", path);
 
     g_pnzTexId = Resource_LoadPNZ(path);
@@ -72,15 +73,27 @@ void Loading_Update(float dt) {
 
             Resource_ClearBGA();
 
+            /* exceed.exe 0x402243: testa BGA\%s.MOV (0x4254E4 = fopen "rb");
+             * se existe, 0x4229C8(path, 0) sem loop e [+0x17C2C] = 2 (0x402688);
+             * senão BGA\%s.DAT. O vídeo é aberto junto com a música, abaixo. */
+            char movPath[MAX_PATH];
+            snprintf(movPath, sizeof(movPath), "%s/BGA/%s.MOV", g_game.currentDirectory, Song_DataIdStr(g_loadingSongId));
+            Movie_Close();
+            FILE* mf = fopen(movPath, "rb");
+            bool useMov = (mf != NULL);
+            if (mf) fclose(mf);
+
             char bgaPath[MAX_PATH];
-            snprintf(bgaPath, sizeof(bgaPath), "%s/BGA/%d.DAT", g_game.currentDirectory, g_loadingSongId);
-            Log_Print("Loading: loading BGA '%s'\n", bgaPath);
-            Resource_LoadBGADirect(bgaPath);
+            snprintf(bgaPath, sizeof(bgaPath), "%s/BGA/%s.DAT", g_game.currentDirectory, Song_DataIdStr(g_loadingSongId));
+            if (!useMov) {
+                Log_Print("Loading: loading BGA '%s'\n", bgaPath);
+                Resource_LoadBGADirect(bgaPath);
+            }
             g_game.bgaLoop = false;
             BGA_Reset();
 
             char audioPath[MAX_PATH];
-            snprintf(audioPath, sizeof(audioPath), "%s/AUDIO/%d.AUD", g_game.currentDirectory, g_loadingSongId);
+            snprintf(audioPath, sizeof(audioPath), "%s/AUDIO/%s.AUD", g_game.currentDirectory, Song_IdStr(g_loadingSongId));
             Log_Print("Loading: loading AUD '%s'\n", audioPath);
             bool audOk = BGM_LoadAUDDirect(audioPath);
 
@@ -95,7 +108,11 @@ void Loading_Update(float dt) {
             while (timeGetTime() - g_loadingStartMs < LOADING_MIN_TO_MUSIC_MS)
                 Sleep(1);
 
-            if (audOk)
+            if (useMov) {
+                Log_Print("Loading: loading MOV '%s'\n", movPath);
+                Movie_Open(movPath, false);
+            }
+            if (audOk && !(g_exDemo && !Demo_SoundOn()))   /* 0x40236A */
                 BGM_Play(false);
             g_game.stateFrame = 0;
             g_game.bgaFrame = 0;

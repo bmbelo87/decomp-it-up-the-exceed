@@ -15,6 +15,9 @@ void Menu_ResetState(void) {
     g_game.isBonusSong = false;
 }
 
+#if 0  /* DESATIVADO (27/09/2026): código só do Prex3, fora do fluxo do Exceed
+ * (LOGO/INTRO/IDLE/TITLE -> CSelect). Preservado; o bloco tem comentários
+ * internos, por isso #if 0 em vez de envolver em comentário. */
 static bool padHit(int player, PadButton btn) {
     return Input_IsPadHit(player, btn);
 }
@@ -234,3 +237,4 @@ void Gamestate_RenderMenu(int bgaIndex, int frame) {
     glColor4f(1, 1, 1, 1);
     Font_DrawText(560.0f, 459.0f, GetVersionString());
 }
+#endif  /* DESATIVADO */

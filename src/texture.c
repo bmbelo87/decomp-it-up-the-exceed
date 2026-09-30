@@ -668,6 +668,25 @@ int Texture_GetHeight(int id) {
     return g_game.textures[id].height;
 }
 
+/* GRAPHICS SMOOTH (GL_LINEAR): num recorte de atlas, amostrar exatamente na
+ * borda do recorte mistura 50% do texel vizinho -> linha fina na borda do
+ * sprite. Recua meio texel para dentro nas bordas internas da textura; as
+ * bordas em 0/1 já são tratadas pelo GL_CLAMP_TO_EDGE. UV normalizado,
+ * aceita flip (u1 > u2 / v1 > v2). Em SHARP (GL_NEAREST) não mexe. */
+void Texture_InsetUV(int texW, int texH, float* u1, float* v1, float* u2, float* v2) {
+    if (g_game.gfxTexFilter || texW <= 0 || texH <= 0) return;
+    const float eps = 1e-4f;
+    float hu = 0.5f / (float)texW, hv = 0.5f / (float)texH;
+    float* us[2] = { u1, u2 };
+    float* vs[2] = { v1, v2 };
+    for (int i = 0; i < 2; i++) {
+        float* a = us[i]; float* b = us[1 - i];
+        if (*a > eps && *a < 1.0f - eps) *a += (*a < *b) ? hu : -hu;
+        a = vs[i]; b = vs[1 - i];
+        if (*a > eps && *a < 1.0f - eps) *a += (*a < *b) ? hv : -hv;
+    }
+}
+
 void Texture_DrawUV(int id, float x, float y, float w, float h,
                      float u1, float v1, float u2, float v2, float r, float g, float b, float alpha) {
     if (id < 0 || id >= MAX_TEXTURES || !g_game.textures[id].inUse) return;
@@ -681,14 +700,24 @@ void Texture_DrawUV(int id, float x, float y, float w, float h,
     float texH = (float)t->height;
     if (texW <= 0) texW = 256.0f;
     if (texH <= 0) texH = 256.0f;
+    float nu1 = u1 / texW, nv1 = v1 / texH, nu2 = u2 / texW, nv2 = v2 / texH;
+    /* O loader de .spr do original (0x4244B4..0x424560) só faz u/texW e
+     * v/texH, sem recuo. Num tile desenhado 1:1 o recuo de meio texel encolhe
+     * a faixa amostrada em 1 texel (ex.: 01.SPR tile 2, v 1..64 em 63 px) e
+     * estica a imagem; só aplica quando o quad está redimensionado. */
+    float du = u2 - u1, dv = v2 - v1;
+    if (du < 0) du = -du;
+    if (dv < 0) dv = -dv;
+    if (fabsf(du - w) > 0.01f || fabsf(dv - h) > 0.01f)
+        Texture_InsetUV((int)texW, (int)texH, &nu1, &nv1, &nu2, &nv2);
     glBegin(GL_QUADS);
-    glTexCoord2f(u1 / texW, v2 / texH);
+    glTexCoord2f(nu1, nv2);
     glVertex2f(x, yUp);
-    glTexCoord2f(u2 / texW, v2 / texH);
+    glTexCoord2f(nu2, nv2);
     glVertex2f(x + w, yUp);
-    glTexCoord2f(u2 / texW, v1 / texH);
+    glTexCoord2f(nu2, nv1);
     glVertex2f(x + w, yUp + h);
-    glTexCoord2f(u1 / texW, v1 / texH);
+    glTexCoord2f(nu1, nv1);
     glVertex2f(x, yUp + h);
     glEnd();
 }

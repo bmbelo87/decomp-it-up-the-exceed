@@ -1,4 +1,5 @@
 #include "pumpy.h"
+#include "bga.h"
 
 static int g_resultFrame;
 /* Este static escondia o g_fontTexId global (font.c:103, declarado extern em
@@ -112,8 +113,73 @@ static int calcGrade(int perfect, int great, int good, int bad, int miss, int ma
     return 5;                                  /* F */
 }
 
+/* ── Exceed: nota por pontuação (CGrade Begin 0x40CDAC / 0x40CE5D) ───────
+ *   razão = score / (1500*N - 3000 - 250*K)
+ *   N = [+0x8]: +1 por linha julgada (0x408996 / 0x408E35)
+ *   K = [+0xC]: +1 quando a linha fecha com todas as setas pisadas
+ *       (0x408954 / 0x408E04) — tratado aqui como N - MISS (PROVÁVEL).
+ *   Escada (0x40D95C): S >= 1.0 e MISS == 0, A >= 0.95, B >= 0.90,
+ *   C >= 0.85, D >= 0.75, senão F.
+ * A razão de cada estágio fica em [+0x174 + estágio*4] (0x40CD72). */
+static float g_exStageRatio[2][4];
+
+static float exRatio(int p) {
+    unsigned miss = g_game.stats.missCount[p];
+    unsigned n = g_game.stats.perfectCount[p] + g_game.stats.greatCount[p] +
+                 g_game.stats.goodCount[p] + g_game.stats.badCount[p] + miss;
+    unsigned k = n - miss;
+    long mx = 1500L * (long)n - 3000L - 250L * (long)k;
+    if (mx <= 0) return 0.0f;
+    return (float)g_game.stats.score[p] / (float)mx;
+}
+
+static int exGradeOf(float r, unsigned miss) {
+    if (r >= 1.0f && miss == 0) return 0;
+    if (r >= 0.95f) return 1;
+    if (r >= 0.90f) return 2;
+    if (r >= 0.85f) return 3;
+    if (r >= 0.75f) return 4;
+    return 5;
+}
+
+/* Estágio no contador do original ([0x568FF8]): 0, 1, 2 e 3 = extra */
+static int exStageIdx(void) {
+    if (g_game.isBonusSong) return 3;
+    int s = 2 - g_game.stageCount;
+    return (s < 0) ? 0 : (s > 2 ? 2 : s);
+}
+
+/* 0x40D0E7..0x40D2A8 */
+static GameState exNextState(void) {
+    float r1 = (g_game.activePlayerMask & 1) ? exRatio(0) : 0.0f;
+    float r2 = (g_game.activePlayerMask & 2) ? exRatio(1) : 0.0f;
+    int st = exStageIdx();
+    Log_Print("RESULT(EX): estágio %d razão P1 %.3f P2 %.3f\n", st, r1, r2);
+    if (r1 < 0.75f && r2 < 0.75f) return STATE_GAMEOVER_ENTER;   /* 0x40D0F3 */
+    if (st == 0 || st == 1) {                                    /* NEXTSTAGE 1 / 2 */
+        g_game.bonusStage = true;
+        return STATE_STAGE_TRANSITION;
+    }
+    if (st == 2) {                                               /* 0x40D181 */
+        bool ok = false;
+        for (int p = 0; p < 2 && !ok; p++) {
+            if (!(g_game.activePlayerMask & (1 << p))) continue;
+            ok = g_exStageRatio[p][0] >= 0.95f && g_exStageRatio[p][1] >= 0.95f &&
+                 g_exStageRatio[p][2] >= 0.95f;
+        }
+        g_game.bonusStage = ok;
+        return ok ? STATE_STAGE_TRANSITION : STATE_GAMEOVER_ENTER;
+    }
+    /* Depois do extra (0x40D21C): NAMEINPUT se algum jogador entra no
+     * highscore (0x41213C != -1), senão IR. O próprio NameInput_Enter faz o
+     * teste e segue para o IR quando ninguém entra (0x413FD8).
+     * return STATE_GAMEOVER_ENTER; */
+    return STATE_NAMEINPUT;
+}
+
 // Decide proximo estado baseado nas grades e contagem de stages
 GameState Result_GetNextState(void) {
+    if (g_exceedSongIds) return exNextState();
     int g1 = calcGrade(g_game.stats.perfectCount[0], g_game.stats.greatCount[0],
                        g_game.stats.goodCount[0], g_game.stats.badCount[0],
                        g_game.stats.missCount[0], (int)g_game.stats.maxCombo[0]);
@@ -149,8 +215,136 @@ GameState Result_GetNextState(void) {
     return STATE_GAMEOVER_ENTER;
 }
 
+/* ── Exceed: CGrade (vtable 0x1282474) ──────────────────────────────────
+ * Begin 0x40CC94: BGA\GRADE.DAT + AUDIO\GRADE.AUD.
+ * Intro 0x40CF34: BGA inteiro (0x41F520) nos quadros 0..60.
+ * Update 0x40CF6C: BGA inteiro no quadro (t % 360) + 60; P1 (bit 1 de
+ * [0x568FF4], 0x40D860) e depois P2 (bit 2, 0x40D51C) desenham números e
+ * letra; sons em t; com t > 360 decide o próximo estado. */
+static int g_exT;
+
+/* 0x40C55C(x, y, 32, 31, d): dígito do font.tga, grade de 8 colunas.
+ * Coordenadas em Y-UP com y na base, quad de (w+4) x (h+8). */
+static void exDigit(int x, int y, int d)
+{
+    if (g_fontTexId < 0 || !g_game.textures[g_fontTexId].inUse) return;
+    float u0 = (float)(d % 8) * 0.125f;
+    float u1 = u0 + 0.125f;
+    float v0 = (float)(d / 8) * 0.12109375f + 0.28515625f;
+    float v1 = v0 + 0.12109375f;
+    int w = 32, h = 31;
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, g_game.textures[g_fontTexId].id);
+    glColor4f(1, 1, 1, 1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0); glVertex2i(x, y + h + 8);
+    glTexCoord2f(u0, v1); glVertex2i(x, y);
+    glTexCoord2f(u1, v1); glVertex2i(x + w + 4, y);
+    glTexCoord2f(u1, v0); glVertex2i(x + w + 4, y + h + 8);
+    glEnd();
+}
+
+/* 0x40C83C (P1): o dígito mais à direita fica em x; revela da esquerda,
+ * um a cada 10 quadros; o dígito da vez gira (elap - 10*(i+1) + 10) % 10. */
+static void exNumP1(int x, int y, int v, int nd, int elap)
+{
+    int shown = 0;
+    int px = x + 22 - 22 * nd;
+    for (int k = nd - 1, i = 0; k >= 0; k--, i++, px += 22) {
+        int p10 = 1;
+        for (int j = 0; j < k; j++) p10 *= 10;
+        int dig = (v / p10) % 10;
+        if (shown > i) {
+            exDigit(px, y, dig);
+        } else if (shown == i) {
+            if (elap >= 10 * (i + 1)) { exDigit(px, y, dig); shown++; }
+            else exDigit(px, y, (elap - 10 * (i + 1) + 10) % 10);
+        } else {
+            break;
+        }
+    }
+}
+
+/* 0x40C710 (P2): começa em x e anda -22; revela da direita */
+static void exNumP2(int x, int y, int v, int nd, int elap)
+{
+    int shown = 0;
+    for (int k = 0; k < nd; k++, x -= 22, v /= 10) {
+        if (k < shown) {
+            exDigit(x, y, v % 10);
+        } else if (k == shown) {
+            if (elap >= 10 * (k + 1)) { exDigit(x, y, v % 10); shown++; }
+            else exDigit(x, y, (elap - 10 * (k + 1) + 10) % 10);
+        } else {
+            break;
+        }
+    }
+}
+
+/* Letra: pares de slots do BGA2 por nota (0x40D95C / 0x40D621).
+ * S 0x24/0x25 · A 0x1A/0x1B · B 0x1C/0x1D · C 0x1E/0x1F · D 0x20/0x21 · F 0x22/0x23 */
+static void exLetter(int grade, int frame)
+{
+    static const int k_slot[6] = { 0x24, 0x1A, 0x1C, 0x1E, 0x20, 0x22 };
+    if (grade < 0 || grade > 5) grade = 5;
+    BGA_DrawSlot(0, frame, k_slot[grade]);
+    BGA_DrawSlot(0, frame, k_slot[grade] + 1);
+}
+
+static void exPlayer(int p, int t)
+{
+    /* perfect, great, good, bad, miss, max combo (3 dígitos) e score (7) */
+    static const int k_y[7] = { 0x143, 0x10F, 0xDC, 0xA8, 0x75, 0x41, 0x0F };
+    int v[7] = {
+        g_game.stats.perfectCount[p], g_game.stats.greatCount[p],
+        g_game.stats.goodCount[p],    g_game.stats.badCount[p],
+        g_game.stats.missCount[p],    (int)g_game.stats.maxCombo[p],
+        (int)g_game.stats.score[p]
+    };
+    for (int i = 0; i < 7; i++) {
+        if (t < 10 * i) break;
+        int nd = (i == 6) ? 7 : 3;
+        if (p == 0) exNumP1(i == 6 ? 0x96 : 0x3E, k_y[i], v[i], nd, t - 10 * i);
+        else        exNumP2(0x251, k_y[i], v[i], nd, t - 10 * i);
+    }
+    /* t >= 150: letra no quadro t+300 (P1) / t+600 (P2). */
+    if (t < 0x96) return;
+    if (g_game.isBattleMode) {
+        /* BATTLE ([0x568FF4] & 0x40), 0x40DAE9 (P1) / 0x40D78D (P2): no lugar da
+         * letra, WIN (0x29/0x2A) ou LOSE (0x26/0x27). Vence o maior max combo;
+         * empatado, a maior pontuação, e o P1 leva o empate de pontuação. */
+        unsigned c0 = g_game.stats.maxCombo[0], c1 = g_game.stats.maxCombo[1];
+        unsigned s0 = g_game.stats.score[0],    s1 = g_game.stats.score[1];
+        bool p1Wins = (c0 != c1) ? (c0 > c1) : (s0 >= s1);
+        bool win = (p == 0) ? p1Wins : !p1Wins;
+        int slot = win ? 0x29 : 0x26;
+        int frame = t + (p == 0 ? 300 : 600);
+        BGA_DrawSlot(0, frame, slot);
+        BGA_DrawSlot(0, frame, slot + 1);
+        return;
+    }
+    exLetter(p == 0 ? g_gradeP1 : g_gradeP2, t + (p == 0 ? 300 : 600));
+}
+
+static void exGradeSounds(int t)
+{
+    if (t <= 120 && t % 5 == 0)                  /* 0x40CFDF: 8-1.WAV */
+        Audio_Play(g_waveSoundIds[SND_8_1], false);
+    if (t == 0x9E)                               /* 0x40D4DF: 9-5.WAV */
+        Audio_Play(g_waveSoundIds[SND_9_5], false);
+    if (t == 0xA3) {                             /* 0x40D312: melhor nota */
+        int best = 5;
+        if ((g_game.activePlayerMask & 1) && g_gradeP1 < best) best = g_gradeP1;
+        if ((g_game.activePlayerMask & 2) && g_gradeP2 < best) best = g_gradeP2;
+        static const SoundID k_rank[6] = { SND_RANK_A, SND_RANK_A, SND_RANK_B,
+                                           SND_RANK_C, SND_RANK_D, SND_RANK_F };
+        Audio_Play(g_waveSoundIds[k_rank[best]], false);
+    }
+}
+
 void Result_Enter(void) {
     g_resultFrame = 0;
+    g_exT = 0;
     g_lastDigitSoundCount = 0;
     g_lastSoundFrame = -100;
     g_gradeSoundPlayed = false;
@@ -161,7 +355,9 @@ void Result_Enter(void) {
 
     BGM_Stop();
     char ap[MAX_PATH];
-    snprintf(ap, sizeof(ap), "%s/AUDIO/83.AUD", g_game.currentDirectory);
+    /* Exceed 0x40CD3F: AUDIO\GRADE.AUD (loop: HIPÓTESE, igual ao Prex3) */
+    snprintf(ap, sizeof(ap), "%s/AUDIO/%s.AUD", g_game.currentDirectory,
+             g_exceedSongIds ? "GRADE" : "83");
     if (BGM_LoadAUDDirect(ap)) BGM_Play(true);
 
     g_gradeP1 = calcGrade(g_game.stats.perfectCount[0], g_game.stats.greatCount[0],
@@ -170,11 +366,46 @@ void Result_Enter(void) {
     g_gradeP2 = calcGrade(g_game.stats.perfectCount[1], g_game.stats.greatCount[1],
                           g_game.stats.goodCount[1], g_game.stats.badCount[1],
                           g_game.stats.missCount[1], (int)g_game.stats.maxCombo[1]);
+    if (g_exceedSongIds) {
+        Gameplay_ExScoreSync();
+        int st = exStageIdx();
+        if (st == 0) memset(g_exStageRatio, 0, sizeof(g_exStageRatio));
+        /* IR: TOTAL_SCORE e m_PlayOrder[estágio] = índice em g_exSongs (src/ir.c) */
+        IR_RecordStage(st, g_game.selectedSongIndex, g_game.stats.score);
+        for (int p = 0; p < 2; p++) {
+            float r = exRatio(p);
+            g_exStageRatio[p][st] = r;
+            if (p == 0) g_gradeP1 = exGradeOf(r, g_game.stats.missCount[0]);
+            else        g_gradeP2 = exGradeOf(r, g_game.stats.missCount[1]);
+        }
+    }
     Log_Print("Result: grades P1=%d P2=%d\n", g_gradeP1, g_gradeP2);
 }
 
 void Result_Update(float dt) {
     (void)dt;
+    if (g_exceedSongIds) {
+        if (g_game.state == STATE_DANCE_GRADE_ENTER) {
+            /* 0x40CF34: quadros 0..60, depois zera o contador */
+            if (++g_resultFrame > 0x3C) {
+                g_resultFrame = 0;
+                g_exT = 0;
+                Game_ChangeState(STATE_DANCE_GRADE_DISPLAY);
+            }
+            return;
+        }
+        if (g_game.state != STATE_DANCE_GRADE_DISPLAY) return;
+        exGradeSounds(g_exT);
+        if (g_exT > 0x168) {                     /* 0x40D0E7 */
+            GameState ns = Result_GetNextState();
+            BGM_Stop();
+            Resource_ClearBGA();
+            Game_ChangeState(ns);
+            return;
+        }
+        g_exT++;
+        return;
+    }
     if (g_game.state == STATE_DANCE_GRADE_ENTER) {
         g_resultFrame++;
         if (g_resultFrame >= 15) {
@@ -221,6 +452,18 @@ void Result_Update(float dt) {
 }
 
 void Result_Render(void) {
+    if (g_exceedSongIds) {
+        if (g_game.bgaPicCount <= 0) return;
+        if (g_game.state == STATE_DANCE_GRADE_ENTER) {
+            BGA_SetEventFrame(0, g_resultFrame);
+            return;
+        }
+        if (g_game.state != STATE_DANCE_GRADE_DISPLAY) return;
+        BGA_SetEventFrame(0, g_exT % 360 + 60);
+        if (g_game.activePlayerMask & 1) exPlayer(0, g_exT);
+        if (g_game.activePlayerMask & 2) exPlayer(1, g_exT);
+        return;
+    }
     if (g_game.state == STATE_DANCE_GRADE_ENTER) {
         if (g_game.bgaPicCount > 0) BGA_Render(0, g_game.bgaFrame);
         return;

@@ -1,4 +1,5 @@
 #include "pumpy.h"
+#include "movie.h"
 #include "vsl.h"
 #include <SDL.h>
 
@@ -46,7 +47,10 @@ static void LoadBGAForState(GameState state) {
     case STATE_WARNING_INIT:
     case STATE_WARNING_ANIM: bgaName = "R_WARN_A"; break; /* Exceed: BGA\R_WARN_A.DAT */
     case STATE_INTRO:        bgaName = ""; break;       /* vídeo, sem BGA */
-    case STATE_CREDIT:       bgaName = "82"; break;     /* CTitle::Begin 0x41C04A: BGA\82.DAT sobre o CREDIT.MOV */
+    case STATE_CREDIT:       bgaName = "82"; break;
+    case STATE_NAMEINPUT:    bgaName = "085"; break;    /* CNameInput 0x414012: BGA\085.DAT */
+    case STATE_IR:           bgaName = "IR"; break;     /* CInternetRanking 0x41371B: BGA\IR.DAT */
+    case STATE_HIGHSCORE:    bgaName = "HS"; break;     /* CHighscore 0x4126E7: BGA\HS.DAT */     /* CTitle::Begin 0x41C04A: BGA\82.DAT sobre o CREDIT.MOV */
     case STATE_LOGO_ENTER:   bgaName = "81"; break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
@@ -55,7 +59,7 @@ static void LoadBGAForState(GameState state) {
     case STATE_GAMEPLAY:
         if (g_game.selectedSongIndex >= 0 && g_game.selectedSongIndex < g_game.songDB.songCount) {
             static char songBGAName[16];
-            snprintf(songBGAName, sizeof(songBGAName), "%d", g_game.songDB.songs[g_game.selectedSongIndex].id);
+            snprintf(songBGAName, sizeof(songBGAName), "%s", Song_DataIdStr(g_game.songDB.songs[g_game.selectedSongIndex].id));
             bgaName = songBGAName;
         } else {
             bgaName = "00";
@@ -70,15 +74,18 @@ static void LoadBGAForState(GameState state) {
     case STATE_STAFF:
     case STATE_STAFF_END:        bgaName = ""; break;
     case STATE_STAGE_TRANSITION:
-        if (g_game.isBonusSong)
+        if (g_exceedSongIds)            /* Exceed: BGA\NST%d.MOV (sem .DAT) */
+            bgaName = "";
+        else if (g_game.isBonusSong)
             bgaName = "lt03";
         else
             bgaName = "lt01";
         break;
-    case STATE_GAMEOVER_ENTER:   bgaName = "84"; break;
-    case STATE_STAGE_BREAK:           bgaName = "083"; break; /* 083.DAT + 7-1.WAV pré-GameOver */
+    case STATE_GAMEOVER_ENTER:   bgaName = g_exceedSongIds ? "" : "84"; break; /* Exceed: BGA\GAMEOVER.MOV */
+    case STATE_STAGE_BREAK:           /* Prex3: 083.DAT + 7-1.WAV; Exceed: BGA\SB.MOV (sem .DAT) */
+        bgaName = g_exceedSongIds ? "" : "083"; break;
     case STATE_DANCE_GRADE_ENTER:
-    case STATE_DANCE_GRADE_DISPLAY: bgaName = "83"; break;
+    case STATE_DANCE_GRADE_DISPLAY: bgaName = g_exceedSongIds ? "GRADE" : "83"; break; /* Exceed 0x40CD2A: BGA\GRADE.DAT */
     case STATE_HOWTOPLAY: bgaName = ""; break; /* limpa BGA do menu imediatamente; 03.DAT carrega no stateFrame==1 */
     case STATE_SERVICE_MENU: bgaName = ""; break; /* SETUP MENU desenha sobre fundo preto */
     default: break;
@@ -113,10 +120,11 @@ static void LoadBGAForState(GameState state) {
         if (BGM_LoadAUDDirect(path)) BGM_Play(true);
     } else if (state == STATE_SONG_SELECT || state == STATE_SONG_SELECT_B) {
         BGM_Stop();
+        /* DESATIVADO (Select do Prex3):
         if (g_game.stageCount == 3)
             SongSelect_Reset();
         else
-            SongSelect_ResetIntro();
+            SongSelect_ResetIntro(); */
     }
     
     g_game.bgaLoop = (state == STATE_MENU_ENTER || state == STATE_MENU_INPUT ||
@@ -208,7 +216,13 @@ void Game_Init(HINSTANCE hInstance) {
     char stepDir[MAX_PATH];
     snprintf(cfgPath, sizeof(cfgPath), "%s/Stage.cfg", g_game.currentDirectory);
     snprintf(stepDir, sizeof(stepDir), "%s/STEP", g_game.currentDirectory);
-    if (Song_LoadDatabase(cfgPath, &g_game.songDB))
+    bool dbOk = Song_LoadDatabase(cfgPath, &g_game.songDB);
+    if (!dbOk) {
+        /* Exceed: sem Stage.cfg, as músicas vêm das tabelas do exceed.exe */
+        ExSelect_BuildSongDB(&g_game.songDB);
+        dbOk = g_game.songDB.songCount > 0;
+    }
+    if (dbOk)
     {
         Log_Print("Song database: %d songs, %d modes\n",
             g_game.songDB.songCount, g_game.songDB.modeCount);
@@ -216,7 +230,7 @@ void Game_Init(HINSTANCE hInstance) {
         {
             SongEntry* e = &g_game.songDB.songs[i];
             char stxPath[MAX_PATH];
-            snprintf(stxPath, sizeof(stxPath), "%s/%d.STX", stepDir, e->id);
+            snprintf(stxPath, sizeof(stxPath), "%s/%s.STX", stepDir, Song_DataIdStr(e->id));
             FILE* test = fopen(stxPath, "rb");
             if (test) { fclose(test); e->hasChart = true; }
         }
@@ -322,7 +336,7 @@ void Game_Update(float dt) {
         }
 
         /* ESC de qualquer tela de jogo reseta os ponteiros de música por modo */
-        SongSelect_ResetCreditIndices();
+        /* SongSelect_ResetCreditIndices(); */   /* DESATIVADO (Select do Prex3) */
 
         if (s == STATE_GAMEPLAY || s == STATE_GAME_INIT) {
             Game_ResetAllCheats(); /* ESC durante gameplay: zera todos os cheats */
@@ -391,27 +405,40 @@ void Game_Update(float dt) {
     case STATE_CREDIT:
         Gamestate_UpdateIntro(dt);
         break;
+    case STATE_HIGHSCORE:
+        Highscore_Update(dt);
+        break;
+    case STATE_IR:
+        IR_Update(dt);
+        break;
+    case STATE_NAMEINPUT:
+        NameInput_Update(dt);
+        break;
     case STATE_EXSELECT:
         ExSelect_Update(dt);
         break;
     case STATE_MENU_ENTER:
     case STATE_MENU_INPUT:
-        Gamestate_UpdateMenu(dt);
+        /* Gamestate_UpdateMenu(dt); */   /* DESATIVADO (menu do Prex3) */
         break;
     case STATE_SONG_SELECT:
     case STATE_SONG_SELECT_B:
-        Gamestate_UpdateSongSelect(dt);
+        /* Gamestate_UpdateSongSelect(dt); */   /* DESATIVADO (Select do Prex3) */
         break;
     case STATE_SONG_TITLE:
     case STATE_SONG_TITLE_OUT:
         Loading_Update(dt);
         break;
     case STATE_GAMEPLAY:
+        if (Movie_IsOpen()) Movie_Update(dt);   /* BGA\%s.MOV da música */
         Gameplay_Update(dt);
         break;
     case STATE_DANCE_GRADE_ENTER:
-        if (g_game.stateFrame == 1)
+        if (g_exDemo) { Demo_End(); break; }    /* a demo não tem Grade */
+        if (g_game.stateFrame == 1) {
+            Movie_Close();
             Result_Enter();
+        }
         Result_Update(dt);
         break;
     case STATE_DANCE_GRADE_DISPLAY:
@@ -421,10 +448,35 @@ void Game_Update(float dt) {
         if (g_game.stateFrame == 1) {
             Log_Print("STAGE: transition count=%d bonus=%d\n", g_game.stageCount, g_game.bonusStage);
         }
-        if (g_game.stateFrame >= 60) {
+        {
+            /* Exceed "NEXTSTAGE n" (0x415078): n = [0x568FF8]+1 (0x40D131) —
+             * 1 depois do stage 1, 2 depois do stage 2, 3 para o extra.
+             * Abre BGA\NST<n>.MOV sem loop e toca NEXTSTAGE.WAV do início.
+             * 0x4151F4: com decoded >= 57 (0x39) vai para SELECT. */
+            bool exDone = false;
+            if (g_exceedSongIds) {
+                if (g_game.stateFrame == 1) {
+                    int n = (g_game.stageCount > 0) ? 3 - g_game.stageCount : 3;
+                    if (n < 1) n = 1;
+                    char path[MAX_PATH];
+                    snprintf(path, sizeof(path), "%s/BGA/NST%d.MOV", g_game.currentDirectory, n);
+                    Movie_Close();
+                    if (!Movie_Open(path, false))
+                        Log_Print("NST: '%s' não abriu\n", path);
+                    if (g_waveSoundIds[SND_NEXTSTAGE] >= 0) {
+                        Audio_Stop(g_waveSoundIds[SND_NEXTSTAGE]);
+                        Audio_Play(g_waveSoundIds[SND_NEXTSTAGE], false);
+                    }
+                }
+                Movie_Update(dt);
+                exDone = !Movie_IsOpen() || Movie_GetDecoded() >= 57;
+                if (exDone) Movie_Close();
+            }
+        if (g_exceedSongIds ? exDone : (g_game.stateFrame >= 60)) {
             if (g_game.bonusStage && g_game.stageCount == 0 && !g_game.isBonusSong) {
                 // Vai pro bonus stage
-                Game_ChangeState(STATE_SONG_SELECT);
+                /* Exceed: volta para a CSelect */
+                Game_ChangeState(g_exceedSongIds ? STATE_EXSELECT : STATE_SONG_SELECT);
             } else if (g_game.isBonusSong) {
                 // Bonus terminou, game over
                 Game_ChangeState(STATE_GAMEOVER_ENTER);
@@ -433,11 +485,44 @@ void Game_Update(float dt) {
                 Game_ChangeState(STATE_GAMEOVER_ENTER);
             } else {
                 // Proximo stage
-                Game_ChangeState(STATE_SONG_SELECT);
+                Game_ChangeState(g_exceedSongIds ? STATE_EXSELECT : STATE_SONG_SELECT);
             }
+        }
         }
         break;
     case STATE_STAGE_BREAK:
+        if (g_exDemo) { Demo_End(); break; }
+        if (g_exceedSongIds) {
+            /* exceed.exe 0x4152B0 (Begin): 0x4229C8("BGA\SB.MOV", 0) sem loop;
+             * se falhar vai para IDLE (aqui: GameOver). Toca GAMESTOP.WAV
+             * do início ([0xA6D2F0]: Stop, SetCurrentPosition(0), Play).
+             * 0x41532C (Update): avança o vídeo e, com o cronômetro
+             * >= 4500 ms (0x1194), vai para GAMEOVER. */
+            static uint32_t sbStart;
+            if (g_game.stateFrame == 1) {
+                Game_ResetAllCheats();
+                Movie_Close();
+                char path[MAX_PATH];
+                snprintf(path, sizeof(path), "%s/BGA/SB.MOV", g_game.currentDirectory);
+                if (!Movie_Open(path, false)) {
+                    Log_Print("SB: '%s' não abriu\n", path);
+                    /* Game_ChangeState(STATE_GAMEOVER_ENTER); */
+                    Attract_Idle();     /* 0x4152E0: "IDLE" */
+                    break;
+                }
+                if (g_waveSoundIds[SND_GAMESTOP] >= 0) {
+                    Audio_Stop(g_waveSoundIds[SND_GAMESTOP]);
+                    Audio_Play(g_waveSoundIds[SND_GAMESTOP], false);
+                }
+                sbStart = timeGetTime();
+            }
+            Movie_Update(dt);
+            if (timeGetTime() - sbStart >= 4500) {
+                Movie_Close();
+                Game_ChangeState(STATE_GAMEOVER_ENTER);
+            }
+            break;
+        }
         /* 083.DAT aparece enquanto 7-1.WAV toca; quando termina → GameOver */
         if (g_game.stateFrame == 1) {
             Game_ResetAllCheats();
@@ -448,6 +533,31 @@ void Game_Update(float dt) {
         }
         break;
     case STATE_GAMEOVER_ENTER:
+        if (g_exceedSongIds) {
+            /* exceed.exe 0x415224: BGA\GAMEOVER.MOV sem loop (falha -> IDLE);
+             * 0x41527C: cronômetro >= 4000 ms (0xFA0) -> IDLE. Sem som. */
+            static uint32_t goStart;
+            if (g_game.stateFrame == 1) {
+                BGM_Stop();
+                Game_ResetAllCheats();
+                Render_SetGlobalColor(0, 0, 0, 0);
+                char path[MAX_PATH];
+                snprintf(path, sizeof(path), "%s/BGA/GAMEOVER.MOV", g_game.currentDirectory);
+                Movie_Close();
+                if (!Movie_Open(path, false))
+                    Log_Print("GAMEOVER: '%s' não abriu\n", path);  /* 0x41525D: -> IDLE (abaixo) */
+                goStart = timeGetTime();
+            }
+            Movie_Update(dt);
+            if (!Movie_IsOpen() || timeGetTime() - goStart >= 4000) {
+                Movie_Close();
+                Resource_ClearBGA();
+                Menu_ResetState();
+                /* Game_ChangeState(STATE_MENU_ENTER); */
+                Attract_Idle();     /* 0x41527C: "IDLE" */
+            }
+            break;
+        }
         if (g_game.stateFrame == 1) {
             BGM_Stop();
             Game_ResetAllCheats(); /* Game Over: zera todos os cheats (centralizado) */
@@ -463,10 +573,10 @@ void Game_Update(float dt) {
         }
         break;
     case STATE_STAFF_ENTER:
-        Staff_Enter();
+        /* Staff_Enter(); */   /* DESATIVADO (Staff do Prex3) */
         break;
     case STATE_STAFF:
-        Staff_Update(dt);
+        /* Staff_Update(dt); */   /* DESATIVADO (Staff do Prex3) */
         break;
     case STATE_STAFF_END:
         BGM_Stop();
@@ -477,7 +587,7 @@ void Game_Update(float dt) {
     case STATE_GAMEOPTION_ANIM:
     case STATE_GAMEOPTION:
     case STATE_GAMEOPTION_EXIT:
-        Gamestate_UpdateGameOption(dt);
+        /* Gamestate_UpdateGameOption(dt); */   /* DESATIVADO (Game Option do Prex3) */
         break;
     case STATE_SERVICE_MENU:
         /* Só captura o input aqui; o desenho e a aplicação ficam em
@@ -657,7 +767,10 @@ void Game_Render(void) {
         g_game.state != STATE_SONG_SELECT &&
         g_game.state != STATE_SONG_SELECT_B &&
         g_game.state != STATE_CREDIT &&         /* CREDIT desenha por slot (intro.c) */
-        g_game.state != STATE_EXSELECT) {       /* EXSELECT desenha por slot (exceed_select.c) */
+        g_game.state != STATE_EXSELECT &&
+        g_game.state != STATE_HIGHSCORE &&
+        g_game.state != STATE_IR &&
+        g_game.state != STATE_NAMEINPUT) {      /* NAMEINPUT desenha por slot (nameinput.c) */             /* IR desenha o próprio BGA (ir.c) */      /* HIGHSCORE desenha por slot (highscore.c) */       /* EXSELECT desenha por slot (exceed_select.c) */
         BGA_Render(0, g_game.bgaFrame);
     }
 
@@ -666,30 +779,45 @@ void Game_Render(void) {
         case STATE_CREDIT:
             Gamestate_RenderIntro();
             break;
+        case STATE_HIGHSCORE:
+            Highscore_Render();
+            break;
+        case STATE_IR:
+            IR_Render();
+            break;
+        case STATE_NAMEINPUT:
+            NameInput_Render();
+            break;
         case STATE_EXSELECT:
             ExSelect_Render();
             break;
         case STATE_MENU_ENTER:
         case STATE_MENU_INPUT:
         case STATE_EXIT:
-            Gamestate_RenderMenu(0, g_game.bgaFrame);
+            /* Gamestate_RenderMenu(0, g_game.bgaFrame); */   /* DESATIVADO (menu do Prex3) */
             break;
     case STATE_SONG_SELECT:
     case STATE_SONG_SELECT_B:
-        Gamestate_RenderSongSelect();
+        /* Gamestate_RenderSongSelect(); */   /* DESATIVADO (Select do Prex3) */
         break;
     case STATE_SONG_TITLE:
     case STATE_SONG_TITLE_OUT:
         Loading_Render();
         break;
     case STATE_GAMEPLAY:
+        if (Movie_IsOpen()) Movie_Render();     /* fundo no lugar do .DAT */
         Gameplay_Render();
+        break;
+    case STATE_STAGE_BREAK:
+        if (g_exceedSongIds && Movie_IsOpen()) Movie_Render();   /* SB.MOV */
         break;
     case STATE_DANCE_GRADE_DISPLAY:
         Result_Render();
         break;
     case STATE_STAGE_TRANSITION:
-        if (g_game.isBonusSong) {
+        if (g_exceedSongIds) {
+            if (Movie_IsOpen()) Movie_Render();   /* NST<n>.MOV */
+        } else if (g_game.isBonusSong) {
             Font_DrawStringCentered(320, 240, "BONUS STAGE", 1, 1, 0, 1);
         } else if (g_game.stageCount > 0) {
             Font_DrawStringCentered(320, 240, "NEXT STAGE", 1, 1, 1, 1);
@@ -698,13 +826,16 @@ void Game_Render(void) {
         }
         break;
     case STATE_GAMEOVER_ENTER:
+        if (g_exceedSongIds) {
+            if (Movie_IsOpen()) Movie_Render();   /* GAMEOVER.MOV */
+        } else
         Font_DrawStringCentered(320, 240, "GAME OVER", 1, 0, 0, 1);
         break;
     case STATE_GAMEOPTION_ENTER:
     case STATE_GAMEOPTION_ANIM:
     case STATE_GAMEOPTION:
     case STATE_GAMEOPTION_EXIT:
-        Gamestate_RenderGameOption();
+        /* Gamestate_RenderGameOption(); */   /* DESATIVADO (Game Option do Prex3) */
         break;
     case STATE_SERVICE_MENU:
         ServiceMenu_UpdateRender();

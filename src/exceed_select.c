@@ -54,12 +54,72 @@ static int  g_panelFrame;   /* +0x44: +1 por quadro com o painel aberto */
 static int  g_panelIdx;     /* +0x88: índice entre os modos disponíveis */
 static int  g_panelDir;     /* +0x58: 0 parado, 1 índice-1, 2 índice+1 */
 static int  g_modeCount;    /* +0x98 */
-static int  g_modeList[5];  /* 0x56390C: bit de modo por índice */
+static int  g_modeList[6];  /* 0x56390C (1P) / 0x563920 (2P): modo por índice */
+static bool g_panel2P;      /* painel dos dois jogadores (0x418A55 / 0x418D35) */
+static int  g_battleDiff;   /* +0x8C: dificuldade da linha BATTLE (0 N, 1 H, 2 C) */
 static int  g_fontTex = -1; /* [obj+0x48C00]: font.tga do BGA\00.DAT (0x404555) */
+static int  g_timerTex = -1;    /* [0x568F8C]: font4.tga do BGA\BFONT.DAT (0x41E60B) */
+static DWORD g_startTick;       /* cronômetro [this+0x18] (0x426940 em 0x4162A7) */
+static int  g_timeLeft;         /* +0xA0: segundos restantes */
+static bool g_started;          /* comando RUN já emitido */
 static int  g_repeat;       /* +0xA8: movimentos seguidos do cursor com DL/DR segurado */
 static bool g_previewOn;    /* +0x84: preview AUDIO\D%X.AUD já disparado */
+static bool g_intro;        /* estado 1 da Select (0x4165A4) antes do principal */
 
 static int wrapCursor(int c);
+
+
+/* ── songDB sintético do Exceed ─────────────────────────────────────────────
+ * Nomes de modo = seções do STX que step.c já conhece (Step_SelectChart):
+ * NORMAL 1, HARD 2, CRAZY 4, DOUBLE 5 (FREESTYLE, "-d"), NIGHTMARE 3 ("-nm").
+ * Mesma ordem de ExceedSong.level. */
+bool g_exceedSongIds = false;
+static const char* k_dbModeName[5] = { "NORMAL", "HARD", "CRAZY", "DOUBLE", "NIGHTMARE" };
+
+const char* Song_IdStr(int id) {
+    static char buf[4][16];
+    static int slot;
+    char* s = buf[slot++ & 3];
+    snprintf(s, 16, g_exceedSongIds ? "%X" : "%d", id);
+    return s;
+}
+
+/* Ocultas desbloqueadas por código: A26 (Oh! Rosa!) e A27 (First Love) usam o
+ * TITLE, o BGA e o STEP da 401 e da 402; só o .AUD (e a prévia D*.AUD) é o delas.
+ * Regra deste projeto, pedida pelo usuário: o exceed.exe não tem esse desvio. */
+int Song_DataId(int id) {
+    if (!g_exceedSongIds) return id;
+    if (id == 0xA26) return 0x401;
+    if (id == 0xA27) return 0x402;
+    return id;
+}
+
+const char* Song_DataIdStr(int id) {
+    return Song_IdStr(Song_DataId(id));
+}
+
+void ExSelect_BuildSongDB(SongDB* db) {
+    memset(db, 0, sizeof(*db));
+    g_exceedSongIds = true;
+    for (int i = 0; i < EX_SONG_COUNT && i < MAX_SONGS; i++) {
+        SongEntry* e = &db->songs[db->songCount++];
+        e->id = (int)g_exSongs[i].id;
+        e->bpm = (float)g_exSongs[i].bpm;
+        const char* t = g_exSongs[i].titleEn[0] ? g_exSongs[i].titleEn : g_exSongs[i].titleKr;
+        strncpy(e->title, t, sizeof(e->title) - 1);
+    }
+    for (int m = 0; m < 5; m++) {
+        SongMode* md = &db->modes[db->modeCount++];
+        strncpy(md->name, k_dbModeName[m], sizeof(md->name) - 1);
+        for (int i = 0; i < EX_SONG_COUNT && md->songCount < MAX_SONGS_PER_MODE; i++) {
+            if (g_exSongs[i].level[m] == -1) continue;
+            md->songIds[md->songCount] = (int)g_exSongs[i].id;
+            md->difficulties[md->songCount] = g_exSongs[i].level[m];
+            md->songCount++;
+        }
+    }
+    Log_Print("EXSELECT: songDB sintético: %d músicas, %d modos\n", db->songCount, db->modeCount);
+}
 
 /* ── Códigos de comando (0x455140..0x455192, verificador 0x4155AC / 0x415958) ── */
 #define EXMOD_X2        0x0002
@@ -79,6 +139,7 @@ static int wrapCursor(int c);
 
 static unsigned g_joined;       /* [0x568FF4] bits 0/1 */
 static unsigned g_flags;        /* [0x568FF4] acima de 0xFFF (X-MODE) */
+bool ExSelect_IsXMode(void) { return (g_flags & 0x8000u) != 0; }
 static unsigned g_mods[2];      /* +0x184 de cada jogador */
 static int      g_joinFrame[2]; /* +0x4C (P1) / +0x54 (P2) */
 static uint8_t  g_buf9[2][9];   /* 0x5638E0 */
@@ -200,8 +261,10 @@ static void checkCodes(int p) {
 
 /* 0x4551C8 (bit do modo) e 0x4551B4 (slot do ícone no SELECT2), mesma ordem de
  * ExceedSong.level: NORMAL HARD CRAZY FREESTYLE NIGHTMARE */
-static const int k_modeBit[5]  = { 0x10, 0x20, 0x400, 0x200, 0x800 };
-static const int k_modeIcon[5] = { 44, 45, 46, 47, 48 };
+/* índice 5 = BATTLE: 0x4551A4 (bits N H C BATTLE) / 0x455194 (slot 49) */
+#define EX_MODE_BATTLE 5
+static const int k_modeBit[6]  = { 0x10, 0x20, 0x400, 0x200, 0x800, 0x40 };
+static const int k_modeIcon[6] = { 44, 45, 46, 47, 48, 49 };
 /* sufixo do comando RUN (0x1283C44..0x1283C74) por modo */
 static const char* k_modeArg[5] = { "-n", "-h", "-c", "-d", "-nm" };
 /* quadro do fundo do painel por índice: parado / entrando pela esquerda / pela direita */
@@ -279,7 +342,8 @@ void ExSelect_Enter(void) {
         int ok = 0;
         for (int i = 0; i < EX_SONG_COUNT; i++) {
             char name[16];
-            snprintf(name, sizeof(name), "%X.TGA", (unsigned)g_exSongs[i].id);
+            /* A26/A27 usam o disco da 401/402 (Song_DataId) */
+            snprintf(name, sizeof(name), "%X.TGA", (unsigned)Song_DataId((int)g_exSongs[i].id));
             g_bannerTex[i] = loadTextureFromRES(name);
             if (g_bannerTex[i] >= 0) ok++;
         }
@@ -298,11 +362,31 @@ void ExSelect_Enter(void) {
     }
     if (g_fontTex < 0) Log_Print("EXSELECT: font.tga do 00.DAT não carregou\n");
 
+    /* 0x41E5D7..0x41E61B: dígitos do contador (font4.tga do BGA\BFONT.DAT) */
+    snprintf(path, sizeof(path), "%s/BGA/BFONT.DAT", g_game.currentDirectory);
+    g_timerTex = -1;
+    if (RES_Open(path)) {
+        g_timerTex = loadTextureFromRES("font4.tga");
+        RES_Close();
+    }
+    if (g_timerTex < 0) Log_Print("EXSELECT: font4.tga do BFONT.DAT não carregou\n");
+
+    g_startTick = timeGetTime();
+    g_timeLeft = 60;
+    g_started = false;
+
     g_joined = Title_GetJoinedMask() & 3;
     if (g_joined == 0) g_joined = 1;   /* sem entrada registrada no CREDIT: P1 */
-    g_flags = 0;
+    /* 0x4162AC: [0x568FF4] &= 0xFFFFF00F — o X-MODE (0x8000) continua.
+     * O +0x184 dos jogadores NÃO é zerado aqui (só pelo código
+     * DL DR DL DR DL DR, 0x4157E9/0x415B99): os modificadores valem para
+     * as músicas seguintes. Zera só no início de um jogo novo
+     * (Menu_ResetState deixa stageCount = 3). */
+    bool newGame = (g_game.stageCount == 3 && !g_game.isBonusSong);
+    if (newGame) g_flags = 0;
+    else         g_flags &= 0xFFFFF00Fu;
     for (int p = 0; p < 2; p++) {
-        g_mods[p] = 0;
+        if (newGame) g_mods[p] = 0;
         g_joinFrame[p] = 0;
         clearCodeBuffers(p);
     }
@@ -316,17 +400,22 @@ void ExSelect_Enter(void) {
     g_modeCount = 0;
 
     /* 0x4163FC..0x41642B: estado inicial */
+    g_intro = true;
     g_frame = 0;
     g_chFrame = 0;
     g_curFrame = 0;
-    g_ch = 0;
-    g_chPrev = 0;
+    /* 0x4163FC: o Begin só copia o canal atual para +0x60 e zera direções;
+     * canal (+0x5C) e cursores (+0x68) persistem entre as músicas. Zera
+     * apenas num jogo novo. */
+    if (newGame) {
+        g_ch = 0;
+        for (int c = 0; c < EX_CHANNEL_COUNT; c++) g_cursor[c] = 0;
+    }
+    g_chPrev = g_ch;
     g_chDir = 0;
     g_curDir = 0;
-    for (int c = 0; c < EX_CHANNEL_COUNT; c++) {
-        g_cursor[c] = 0;
-        g_cursorPrev[c] = 0;
-    }
+    for (int c = 0; c < EX_CHANNEL_COUNT; c++)
+        g_cursorPrev[c] = g_cursor[c];
     buildList();
 }
 
@@ -355,8 +444,13 @@ static void moveCursor(int dir) {
     g_cursor[g_ch] = wrapCursor(g_cursor[g_ch] + (dir == 1 ? -1 : 1));
 }
 
-static bool padHit(PadButton b)  { return Input_IsPadHit(0, b)  || Input_IsPadHit(1, b); }
-static bool padDown(PadButton b) { return Input_IsPadDown(0, b) || Input_IsPadDown(1, b); }
+/* 0x4170D2 etc.: só os painéis de quem entrou ([0x568FF4] bits 0/1) contam */
+static bool padHit(PadButton b) {
+    return ((g_joined & 1) && Input_IsPadHit(0, b)) || ((g_joined & 2) && Input_IsPadHit(1, b));
+}
+static bool padDown(PadButton b) {
+    return ((g_joined & 1) && Input_IsPadDown(0, b)) || ((g_joined & 2) && Input_IsPadDown(1, b));
+}
 
 /* 0x4182C5..0x418506: CENTER na música abre o painel. Máscara de modos =
  * níveis != -1 (0x455200 + 4*i). O bit 0x40 (BATTLE, com os dois jogadores)
@@ -365,15 +459,50 @@ static void openPanel(void) {
     int s = findSong(g_list[wrapCursor(g_cursor[g_ch])]);
     if (s < 0) return;
     g_modeCount = 0;
-    for (int m = 0; m < 5; m++)
-        if (g_exSongs[s].level[m] != -1)
-            g_modeList[g_modeCount++] = m;   /* índice em k_modeBit */
+    g_panel2P = (g_joined & 3) == 3;
+    if (!g_panel2P) {
+        for (int m = 0; m < 5; m++)
+            if (g_exSongs[s].level[m] != -1)
+                g_modeList[g_modeCount++] = m;   /* índice em k_modeBit */
+    } else {
+        /* 0x418339..0x4184C5: N H C disponíveis; +0x8C fica com o último
+         * deles; BATTLE (0x40) entra com os dois jogadores */
+        g_battleDiff = 0;
+        for (int m = 0; m < 3; m++)
+            if (g_exSongs[s].level[m] != -1) {
+                g_modeList[g_modeCount++] = m;
+                g_battleDiff = m;
+            }
+        g_modeList[g_modeCount++] = EX_MODE_BATTLE;
+    }
     if (g_modeCount == 0) return;
     if (!g_previewOn) startPreview();   /* 0x4182CE: preview ainda não tinha disparado */
     g_chosen = true;
     g_panelFrame = 0;   /* +0x44 */
     g_panelIdx = 0;     /* +0x88 */
     g_panelDir = 0;     /* +0x58 */
+}
+
+/* 0x415514: nível da música no modo; a linha BATTLE mostra o da +0x8C */
+static int levelOf(int s, int m) {
+    if (m == EX_MODE_BATTLE) m = g_battleDiff;
+    return g_exSongs[s].level[m];
+}
+
+/* 0x41816A..0x41822D: no painel de 2 jogadores, DR sem linha à direita troca
+ * a dificuldade do BATTLE entre as disponíveis */
+static void cycleBattleDiff(int s) {
+    const int* lv = g_exSongs[s].level;
+    if (g_battleDiff == 1) {
+        if (lv[0] != -1) g_battleDiff = 0;
+        else if (lv[2] != -1) g_battleDiff = 2;
+    } else if (g_battleDiff == 2) {
+        if (lv[1] != -1) g_battleDiff = 1;
+        else if (lv[0] != -1) g_battleDiff = 0;
+    } else {
+        if (lv[2] != -1) g_battleDiff = 2;
+        else if (lv[1] != -1) g_battleDiff = 1;
+    }
 }
 
 /* 0x417153..0x41718E: UL/UR com o painel aberto cancelam a escolha */
@@ -385,23 +514,141 @@ static void cancelPanel(void) {
     g_panelIdx = -1;
 }
 
-/* 0x41850B..0x418693: confirma -> "RUN %X -n|-h|-c|-d|-nm" para 0x4102D4.
- * O gameplay do Exceed ainda não existe no projeto: por enquanto só registra
- * o comando e mantém o painel. */
-static void confirmPanel(void) {
+/* 0x41850B..0x418693: início do jogo — pelo segundo CENTER no painel ou pelo
+ * fim do contador. Com o painel nunca aberto/cancelado ([+0x88] == -1) usa o
+ * primeiro modo disponível na ordem N H C FS NM (0x4187A9..0x4189AC).
+ * Monta "RUN %X -n|-h|-c|-d|-nm" para 0x4102D4. O gameplay do Exceed ainda
+ * não existe no projeto: por enquanto só registra o comando e trava a tela. */
+static void startGame(void) {
+    if (g_started) return;
     int s = findSong(g_list[wrapCursor(g_cursor[g_ch])]);
-    int m = g_modeList[g_panelIdx];
     if (s < 0) return;
+    int m = -1;
+    if (g_chosen && g_panelIdx >= 0 && g_panelIdx < g_modeCount) {
+        m = g_modeList[g_panelIdx];
+    } else {
+        int last = ((g_joined & 3) == 3) ? 3 : 5;   /* 2P: só N H C */
+        for (int k = 0; k < last; k++)
+            if (g_exSongs[s].level[k] != -1) { m = k; break; }
+    }
+    if (m < 0) return;
+    g_started = true;
     stopPreview();          /* 0x418512 */
     playWave(SND_START);    /* 0x418521 */
-    Log_Print("EXSELECT: RUN %X %s (modo 0x%X, nível %d)\n",
-              (unsigned)g_exSongs[s].id, k_modeArg[m], k_modeBit[m],
-              g_exSongs[s].level[m]);
+    /* 0x4186D4..0x418712: BATTLE usa o sufixo da dificuldade +0x8C */
+    int argIdx = (m == EX_MODE_BATTLE) ? g_battleDiff : m;
+    Log_Print("EXSELECT: RUN %X %s%s (modo 0x%X, nível %d)\n",
+              (unsigned)g_exSongs[s].id, k_modeArg[argIdx],
+              (m == EX_MODE_BATTLE) ? " [BATTLE]" : "", k_modeBit[m],
+              levelOf(s, m));
     g_armed = false;
+
+    /* 0x4102D4 ("RUN ...") -> gameplay: aproveita o fluxo Loading/Gameplay do
+     * projeto via songDB sintético. */
+    int id = (int)g_exSongs[s].id;
+    g_game.selectedSongIndex = Song_FindByID(&g_game.songDB, id);
+    g_game.selectedModeIndex = Song_FindMode(&g_game.songDB, k_dbModeName[argIdx]);
+    if (g_game.selectedSongIndex < 0 || g_game.selectedModeIndex < 0) {
+        Log_Print("EXSELECT: songDB sem a música/modo (%d/%d) — sem gameplay\n",
+                  g_game.selectedSongIndex, g_game.selectedModeIndex);
+        return;
+    }
+    g_game.selectedDifficulty = levelOf(s, m);
+    g_game.activePlayerMask = (int)(g_joined & 3);
+    g_game.isBattleMode = (m == EX_MODE_BATTLE);
+    /* Velocidade confirmada pelos ícones (x2/x3/x4/x8); rv entra no mesmo
+     * ciclo de velocidade. Os demais (r/m/v/ns, 0x800, 0x1000, X-MODE) ainda
+     * não têm efeito no gameplay do projeto. */
+    for (int p = 0; p < 2; p++) {
+        unsigned mm = g_mods[p];
+        g_game.cmdSpeedMult[p] = (mm & EXMOD_X8) ? 8 : (mm & EXMOD_X4) ? 4 :
+                                 (mm & EXMOD_X3) ? 3 : (mm & EXMOD_X2) ? 2 : 1;
+        g_game.cmdRandomVelocity[p] = (mm & EXMOD_RV) != 0;
+    }
+    Loading_Enter(id);
+}
+
+/* Comando RUN/PLAY do console (parser 0x401A0A..0x401D56): "<id> <modo> [-demo|-demo2]".
+ * Entra direto no gameplay, sem passar pela Select. m = índice de k_dbModeName ou
+ * EX_MODE_BATTLE (-bt), que usa a última dificuldade disponível entre N/H/C.
+ * [0x568FF4] começa em 3 (os dois jogadores); -demo liga o autoplay da atração. */
+bool ExSelect_Run(int id, int m, int demo)
+{
+    int s = findSong(id);
+    if (s < 0) return false;
+    int argIdx = m;
+    if (m == EX_MODE_BATTLE) {
+        argIdx = -1;
+        for (int k = 0; k < 3; k++)
+            if (g_exSongs[s].level[k] != -1) argIdx = k;
+        if (argIdx < 0) return false;
+        g_battleDiff = argIdx;
+    }
+    if (argIdx < 0 || argIdx > 4 || g_exSongs[s].level[argIdx] == -1) return false;
+
+    g_game.selectedSongIndex = Song_FindByID(&g_game.songDB, id);
+    g_game.selectedModeIndex = Song_FindMode(&g_game.songDB, k_dbModeName[argIdx]);
+    if (g_game.selectedSongIndex < 0 || g_game.selectedModeIndex < 0) return false;
+
+    Menu_ResetState();
+    g_game.selectedDifficulty = g_exSongs[s].level[argIdx];
+    g_game.activePlayerMask = (argIdx == 3 || argIdx == 4 || demo == 2) ? 1 : 3;
+    g_game.isBattleMode = (m == EX_MODE_BATTLE);
+    for (int p = 0; p < 2; p++) {
+        g_game.cmdSpeedMult[p] = 1;
+        g_game.cmdRandomVelocity[p] = false;
+    }
+    g_exDemo = (demo != 0);
+    Log_Print("RUN %X %s%s%s\n", (unsigned)id, k_modeArg[argIdx],
+              (m == EX_MODE_BATTLE) ? " -bt" : "",
+              demo == 2 ? " -demo2" : demo ? " -demo" : "");
+    Loading_Enter(id);
+    return true;
+}
+
+/* 0x41944C: com crédito, CENTER de quem ainda não entrou -> PUSHPANEL.WAV,
+ * consome o crédito, liga o bit do jogador e fecha o painel (+0x95 = 0).
+ * Testa o P1 antes; se o P1 entrou neste quadro, o P2 fica para o próximo. */
+static void tryLateJoin(void) {
+    if (!Coin_HasCredit()) return;
+    for (int p = 0; p < 2; p++) {
+        if (g_joined & (1u << p)) continue;
+        if (!Input_IsPadHit(p, PAD_C)) continue;
+        playWave(SND_PUSHPANEL);
+        g_joinFrame[p] = 0;
+        Coin_ConsumeCredit();
+        g_joined |= (1u << p);
+        g_chosen = false;
+        Log_Print("EXSELECT: P%d entrou na Select\n", p + 1);
+        return;
+    }
 }
 
 void ExSelect_Update(float dt) {
     (void)dt;
+
+    if (g_intro) {
+        /* 0x4165A4: +0x2C, +0x4C e +0x54 andam; com +0x2C >= 30 vai para o
+         * estado principal e zera o cronômetro (0x426940). */
+        g_frame++;
+        g_joinFrame[0]++;
+        g_joinFrame[1]++;
+        if (g_frame >= 0x1E) {
+            g_intro = false;
+            g_startTick = timeGetTime();
+        }
+        return;
+    }
+
+    if (g_started) {
+        /* RUN já emitido: sem gameplay ainda, só segue animando */
+        g_frame++;
+        g_chFrame++;
+        g_curFrame++;
+        g_joinFrame[0]++;
+        g_joinFrame[1]++;
+        return;
+    }
 
     if (!g_chosen) {
         /* 0x4170D2..0x4171EA: UL/UR (bits 0x08/0x10) trocam o canal; segurando,
@@ -441,19 +688,26 @@ void ExSelect_Update(float dt) {
                 g_panelFrame = 60;
                 g_panelIdx++;
                 g_panelDir = 2;
+            } else if (g_panel2P) {
+                int s = findSong(g_list[wrapCursor(g_cursor[g_ch])]);
+                if (s >= 0) cycleBattleDiff(s);   /* 0x41769E -> 0x41816A */
+                g_panelDir = 0;                   /* 0x4176AF */
             } else {
                 g_panelDir = 0;
             }
         } else if (padHit(PAD_C)) {
             /* 0x417763..0x417788: primeiro CENTER arma, o segundo confirma */
             if (g_armed) {
-                confirmPanel();
+                startGame();
             } else {
                 g_armed = true;
                 playWave(SND_3_2);  /* 0x417794 */
             }
         }
     }
+
+    /* 0x4177C4: entrada de jogador com crédito */
+    tryLateJoin();
 
     /* 0x415E3C (chamado em 0x4177C9): cada painel apertado entra nos buffers
      * na ordem DL DR C UL UR; se houve toque, confere os códigos e toca 3-2. */
@@ -474,13 +728,26 @@ void ExSelect_Update(float dt) {
         }
     }
 
+    /* 0x4177D1: tempo esgotado (ou [+0xA0] zerado) -> início do jogo */
+    if (g_timeLeft <= 0) startGame();
+
+    /* 0x416FAD..0x41701A: 60 s pelo cronômetro; ao mudar e estar <= 5 toca
+     * TIME_LIMIT.WAV */
+    {
+        int ms = (int)(timeGetTime() - g_startTick);
+        int left = (60000 - ms) / 1000;
+        if (left != g_timeLeft && left <= 5)
+            playWave(SND_TIME_LIMIT);
+        g_timeLeft = left;
+    }
+
     /* 0x416B27..0x416BA8: solto o DL/DR, zera a contagem de repetição */
     if (!padDown(PAD_DL) && !padDown(PAD_DR))
         g_repeat = 0;
 
     /* 0x416BB2..0x416C09: cursor parado há mais de 30 quadros, sem rotação de
      * canal e sem preview -> toca AUDIO\D%X.AUD */
-    if (g_curFrame > 30 && g_chDir == 0 && !g_previewOn)
+    if (!g_started && g_curFrame > 30 && g_chDir == 0 && !g_previewOn)
         startPreview();
 
     g_frame++;
@@ -539,15 +806,30 @@ static void bannerQuad(int tex, float x0, float x1, float yA, float zA, float yB
 
 /* 0x4195D8(cursor, ângulo): roda de 11 banners (i = -5..5), 27.69° entre eles.
  * Constantes: 0x456E9C..0x456EC4. tx/ty dos banners (0x563AC8/0x563ACC) só
- * mudam pelo console de debug: valem 0. */
+ * mudam pelo console de debug: valem 0.
+ * Todas são ajustáveis pelo /set do console (0x41D309), com estes nomes. */
+float g_exCamX1 = -62.0f;   /* 0x456E9C */
+float g_exCamX2 =  62.0f;   /* 0x456EA0 */
+float g_exCamY1 =   0.0f;   /* 0x563ACC */
+float g_exCamY2 =  90.0f;   /* 0x456EA4 */
+float g_exCamZ1 =  90.0f;   /* 0x456EA8 */
+float g_exCamR  = -27.69f;  /* 0x456EAC */
+float g_exCamR2 =  38.0f;   /* 0x456EB0 */
+float g_exCamR3 = -51.0f;   /* 0x456EB4 */
+float g_exCamTx =   0.0f;   /* 0x563AC8 */
+float g_exCamTy = 320.0f;   /* 0x456EB8 */
+float g_exCamP  =  50.0f;   /* 0x456EBC */
+float g_exCamCy =  73.0f;   /* 0x456EC0 */
+float g_exCamCy2 = 66.0f;   /* 0x456EC4 */
+
 static void drawCarousel(int cursor, float angle, float r, float g, float b, float a) {
     if (g_listCount <= 0) return;
     glPushMatrix();
     enterS3DSpace();
-    glTranslatef(320.0f, 73.0f, 90.0f);
-    glTranslatef(0.0f, 66.0f, 0.0f);
-    glRotatef(-51.0f, 1.0f, 0.0f, 0.0f);
-    glTranslatef(0.0f, -66.0f, 0.0f);
+    glTranslatef(320.0f, g_exCamCy, g_exCamZ1);
+    glTranslatef(0.0f, g_exCamCy2, 0.0f);
+    glRotatef(g_exCamR3, 1.0f, 0.0f, 0.0f);
+    glTranslatef(0.0f, -g_exCamCy2, 0.0f);
     glColor4f(r, g, b, a);
     for (int i = -5; i < 6; i++) {
         int idx = cursor + i;
@@ -556,18 +838,18 @@ static void drawCarousel(int cursor, float angle, float r, float g, float b, flo
         if (idx < 0 || idx >= g_listCount) continue;
 
         glPushMatrix();
-        glTranslatef(0.0f, 50.0f, 0.0f);
+        glTranslatef(0.0f, g_exCamP, 0.0f);
         glRotatef(angle, 0.0f, 0.0f, 1.0f);
-        glRotatef((float)i * -27.69f, 0.0f, 0.0f, 1.0f);
+        glRotatef((float)i * g_exCamR, 0.0f, 0.0f, 1.0f);
         /* 0x4196C1..0x4196DE: Push / Rotatef(90,0,0,1) / Pop — sem efeito */
-        glTranslatef(0.0f, -50.0f, 0.0f);
+        glTranslatef(0.0f, -g_exCamP, 0.0f);
 
         int tex = bannerForId(g_list[idx]);
         if (tex >= 0) {
             glPushMatrix();
-            glTranslatef(0.0f, 320.0f, 0.0f);
-            glRotatef(38.0f, 1.0f, 0.0f, 0.0f);
-            bannerQuad(tex, -62.0f, 62.0f, 90.0f, 0.0f, 0.0f, 0.0f);
+            glTranslatef(g_exCamTx, g_exCamTy, 0.0f);
+            glRotatef(g_exCamR2, 1.0f, 0.0f, 0.0f);
+            bannerQuad(tex, g_exCamX1, g_exCamX2, g_exCamY2, 0.0f, g_exCamY1, 0.0f);
             glPopMatrix();
         }
         glPopMatrix();
@@ -626,12 +908,12 @@ static void drawPanelRow(int s, int m, bool lit, float hl, float b) {
         BGA_DrawSlot(SEL2_BGA, 660, 39);
         BGA_SetColor(SEL2_BGA, 1.0f, 1.0f);
         glColor4f(b, b, b, 1.0f);
-        drawNumber(455, 324, 25, 25, 19, g_exSongs[s].level[m], 2);
+        drawNumber(455, 324, 25, 25, 19, levelOf(s, m), 2);
         BGA_SetColor(SEL2_BGA, b, 1.0f);
         BGA_DrawSlot(SEL2_BGA, 1170, k_modeIcon[m]);
     } else {
         glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
-        drawNumber(455, 324, 25, 25, 19, g_exSongs[s].level[m], 2);
+        drawNumber(455, 324, 25, 25, 19, levelOf(s, m), 2);
         BGA_SetColor(SEL2_BGA, 0.5f, 1.0f);
         BGA_DrawSlot(SEL2_BGA, 1170, k_modeIcon[m]);
     }
@@ -666,11 +948,11 @@ static void drawPanel(void) {
             if (k == 0) {                                  /* 0x417A91 */
                 BGA_DrawSlot(SEL2_BGA, 660, 39);
                 glColor4f(1.0f, 1.0f, 1.0f, ca);
-                drawNumber(455, 324, 25, 25, 19, g_exSongs[s].level[m], 2);
+                drawNumber(455, 324, 25, 25, 19, levelOf(s, m), 2);
                 BGA_DrawSlot(SEL2_BGA, 1170, k_modeIcon[m]);
             } else {                                       /* 0x417B0D */
                 glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
-                drawNumber(455, 324, 25, 25, 19, g_exSongs[s].level[m], 2);
+                drawNumber(455, 324, 25, 25, 19, levelOf(s, m), 2);
                 BGA_SetColor(SEL2_BGA, 0.5f, 1.0f);
                 BGA_DrawSlot(SEL2_BGA, 1170, k_modeIcon[m]);
                 BGA_SetColor(SEL2_BGA, 1.0f, 1.0f);
@@ -703,6 +985,43 @@ static void drawPanel(void) {
         glPopMatrix();
         y += -70.0f;
     }
+}
+
+/* 0x41EDB0(x, y, valor) + 0x41ECA0: 2 dígitos do font4.tga, grade de 7
+ * colunas (u = col*0.13671875, v = 0.75 + linha*0.125), célula 35x32,
+ * unidade primeiro, recuando 35 px. */
+static void drawTimerNumber(int x, int y, int value) {
+    if (g_timerTex < 0) return;
+    Texture_Bind(g_timerTex);
+    glEnable(GL_TEXTURE_2D);
+    for (int i = 0; i < 2; i++) {
+        int d = value % 10;
+        float u0 = (float)(d % 7) * 0.13671875f;
+        float u1 = u0 + 0.13671875f;
+        float v0 = (float)(d / 7) * 0.125f + 0.75f;
+        float v1 = v0 + 0.125f;
+        glBegin(GL_QUADS);
+        glTexCoord2f(u0, v0); glVertex2i(x, y + 32);
+        glTexCoord2f(u0, v1); glVertex2i(x, y);
+        glTexCoord2f(u1, v1); glVertex2i(x + 35, y);
+        glTexCoord2f(u1, v0); glVertex2i(x + 35, y + 32);
+        glEnd();
+        value /= 10;
+        x -= 35;
+    }
+    glDisable(GL_TEXTURE_2D);
+}
+
+/* 0x41701D..0x417081: contador — normal em (607,431) e de novo em (605,433)
+ * com blend aditivo (S3D 6,1 = SRC_ALPHA, ONE); volta para 6,7. */
+static void drawTimer(void) {
+    int v = g_timeLeft < 0 ? 0 : g_timeLeft;
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    drawTimerNumber(607, 431, v);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    drawTimerNumber(605, 433, v);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
 /* 0x419B2C / 0x41991E: ícones de modificador no SELECT2.
@@ -753,6 +1072,17 @@ void ExSelect_Render(void) {
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    if (g_intro) {
+        /* 0x4165CB: SELECT inteiro (0x41F520) no quadro +0x2C — é onde entram
+         * X.spr / xs.spr (X00..X24). Depois P2 (bit 2) e P1 (bit 1):
+         * moldura no quadro t+360 e ícones (0x419910 / 0x419B24). */
+        BGA_SetEventFrame(SEL_BGA, g_frame);
+        drawPlayerMods(1);
+        drawPlayerMods(0);
+        return;
+    }
+
     setProjection();
 
     BGA_DrawSlot(SEL_BGA, g_frame % 240, 0);
@@ -847,6 +1177,9 @@ void ExSelect_Render(void) {
     /* 0x416F95: P2 (0x419170) e P1 (0x419081) */
     drawPlayerMods(1);
     drawPlayerMods(0);
+
+    /* 0x416FAA */
+    drawTimer();
 
     /* 0x4170C0: com a música escolhida o quadro segue para o painel */
     if (g_chosen) drawPanel();

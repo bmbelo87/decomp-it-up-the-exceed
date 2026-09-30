@@ -340,6 +340,9 @@ static void drawTileQuad(SPRTileDef* tile, float offsetX, float offsetY) {
     float v1 = tile->v1;
     float u2 = tile->u2;
     float v2 = tile->v2;
+    /* SMOOTH: sem sangrar o texel vizinho do atlas (ver Texture_InsetUV) */
+    Texture_InsetUV(g_game.textures[tile->texId].width, g_game.textures[tile->texId].height,
+                    &u1, &v1, &u2, &v2);
 
     glBegin(GL_QUADS);
     glTexCoord2f(u1, v1);
@@ -722,7 +725,8 @@ void BGA_Render(int bgaIndex, int frame) {
                    g_game.state == STATE_MENU_INPUT);
 
     if (isMenu) {
-        Gamestate_RenderMenu(bgaIndex, frame);
+        /* Gamestate_RenderMenu(bgaIndex, frame); */   /* DESATIVADO (menu do Prex3) */
+        BGA_SetEventFrame(bgaIndex, frame);
     } else {
         BGA_SetEventFrame(bgaIndex, frame);
     }

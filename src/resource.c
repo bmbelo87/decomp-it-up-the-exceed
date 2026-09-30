@@ -1327,7 +1327,31 @@ int Resource_LoadPNZ(const char* path) {
     fclose(f);
 
     uint32_t decSize = 0;
-    uint8_t* dec = Resource_DecryptENC1(buf, (uint32_t)fileSize, &decSize);
+    uint8_t* dec = NULL;
+    if (fileSize >= 0x90 && memcmp(buf, "ENC2", 4) == 0) {
+        /* Exceed: mesmo ENC2 dos .AUD (exceed.exe 0x420390) — após hdr[0x88]
+         * vêm a semente, um bloco de 0x400 bytes (tabela via 0x411DBC em
+         * fatias de 16) e hdr[0x84] bytes de dados. */
+        uint32_t size = *(uint32_t*)(buf + 0x84);
+        uint32_t off = 0x8C + *(uint32_t*)(buf + 0x88);
+        if (off + 4 + 0x400 <= (uint32_t)fileSize) {
+            uint32_t avail = (uint32_t)fileSize - off - 4 - 0x400;
+            if (size > avail) size = avail;
+            uint32_t seed2 = *(uint32_t*)(buf + off);
+            uint8_t table[0x400];
+            for (int k = 0; k < 0x400; k += 16)
+                RESPACK_DeriveKey16(buf + off + 4 + k, table + k);
+            dec = (uint8_t*)malloc(size ? size : 1);
+            if (dec) {
+                const uint8_t* src = buf + off + 4 + 0x400;
+                for (uint32_t i = 0; i < size; i++)
+                    dec[i] = bit_reverse(src[i]) ^ table[(seed2 + i) & 0x3FF];
+                decSize = size;
+            }
+        }
+    } else {
+        dec = Resource_DecryptENC1(buf, (uint32_t)fileSize, &decSize);
+    }
     free(buf);
 
     if (!dec) {
@@ -1335,7 +1359,14 @@ int Resource_LoadPNZ(const char* path) {
         return -1;
     }
 
-    int texId = Texture_LoadFromMemory(dec, decSize, "pnz_title.png");
+    /* O decodificador escolhe pelo nome: PNG no Prex3, TGA/BMP/JPG no Exceed */
+    const char* tmpName = "pnz_title.png";
+    if (decSize >= 2 && dec[0] == 'B' && dec[1] == 'M') tmpName = "pnz_title.bmp";
+    else if (decSize >= 3 && dec[0] == 0xFF && dec[1] == 0xD8) tmpName = "pnz_title.jpg";
+    else if (decSize >= 4 && memcmp(dec, "\x89PNG", 4) != 0) tmpName = "pnz_title.tga";
+    Log_Print("PNZ: %u bytes decodificados, magic %02X %02X %02X %02X -> %s\n",
+              decSize, dec[0], dec[1], dec[2], dec[3], tmpName);
+    int texId = Texture_LoadFromMemory(dec, decSize, tmpName);
     free(dec);
 
     if (texId < 0) {
@@ -1585,6 +1616,8 @@ int g_fontSprHD03 = -1;
 int g_fontSprHD05 = -1;
 int g_fontSprBT01 = -1;
 int g_fontSprBT02 = -1;
+int g_fontSprGGS = -1;
+int g_fontSprGGD = -1;
 int g_fontArrow541 = -1;
 int g_fontArrow542 = -1;
 int g_fontArrow543 = -1;
@@ -1661,6 +1694,14 @@ void Resource_LoadFontAndArrows(const char* datPath) {
     SPR_LoadSPR("BT_MC01.SPR", NULL, NULL, NULL);
     g_fontSprBT02 = g_game.sprTileCount;
     SPR_LoadSPR("BT_MC02.SPR", NULL, NULL, NULL);
+    /* Exceed (exceed.exe 0x404651/0x404661): lifebar em gg_s.spr e gg_d.spr.
+     * Não existem no 00.DAT do Prex3: sem tiles, o índice fica -1. */
+    g_fontSprGGS = g_game.sprTileCount;
+    SPR_LoadSPR("gg_s.spr", NULL, NULL, NULL);
+    if (g_game.sprTileCount == g_fontSprGGS) g_fontSprGGS = -1;
+    g_fontSprGGD = g_game.sprTileCount;
+    SPR_LoadSPR("gg_d.spr", NULL, NULL, NULL);
+    if (g_game.sprTileCount == g_fontSprGGD) g_fontSprGGD = -1;
 
     /* Não existe inversão de V a fazer aqui. Os .spr/.sp2 nomeiam texturas
      * .tga, mas nenhum .DAT do jogo traz TGA: o RES só tem PNG, e o fallback

@@ -17,13 +17,19 @@ void Gamestate_UpdateLogo(float dt) {
     }
     switch (g_game.state) {
     case STATE_LOGO_ENTER:
+        /* exceed.exe CLogo 0x413DB0: com crédito (0x41FE94) vai para TITLE */
+        if (Coin_HasCredit()) {
+            Game_ChangeState(STATE_CREDIT);
+            return;
+        }
+        /* O CENTER não pula o logo no original:
         if (padHit(0, PAD_C) || padHit(1, PAD_C)) {
             Audio_Play(g_waveSoundIds[SND_3_2], false);
             Game_ChangeState(STATE_INTRO);
             return;
-        }
+        } */
         if (g_game.bgaFrame >= g_game.bgaMaxFrame && g_game.stateFrame > 60)
-            Game_ChangeState(STATE_INTRO); /* Exceed: 81 -> INTRO.MOV */
+            Attract_Idle();     /* fim -> IDLE (0x413394); era: Game_ChangeState(STATE_INTRO) */
         break;
     case STATE_LOGO_SKIP:
         Game_ChangeState(STATE_MENU_ENTER);

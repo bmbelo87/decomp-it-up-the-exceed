@@ -1,5 +1,9 @@
 #include "pumpy.h"
 
+#if 0  /* DESATIVADO (27/09/2026): código só do Prex3, fora do fluxo do Exceed
+ * (LOGO/INTRO/IDLE/TITLE -> CSelect). Preservado; o bloco tem comentários
+ * internos, por isso #if 0 em vez de envolver em comentário. */
+
 static float staffAccumulator = 0.0f;
 static uint32_t staffFrame = 0;
 static uint32_t staffMaxFrame = 0;
@@ -50,3 +54,4 @@ void Staff_Update(float dt) {
         Game_ChangeState(STATE_MENU_ENTER);
     }
 }
+#endif  /* DESATIVADO */

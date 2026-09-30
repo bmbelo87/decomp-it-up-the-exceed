@@ -370,7 +370,10 @@ static const char* g_waveFiles[SND_COUNT] = {
     "CHGMOD.wav",     // SND_CHGMOD
     "START.wav",      // SND_START
     "TIME_LIMIT.wav", // SND_TIME_LIMIT
-    "PUSHPANEL.wav"   // SND_PUSHPANEL
+    "PUSHPANEL.wav",  // SND_PUSHPANEL
+    "GAMESTOP.wav",   // SND_GAMESTOP
+    "9-5.wav",        // SND_9_5
+    "NEXTSTAGE.wav"   // SND_NEXTSTAGE
 };
 
 int g_waveSoundIds[SND_COUNT];
