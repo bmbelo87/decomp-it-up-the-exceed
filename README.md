@@ -2,7 +2,7 @@
 
 # ExceedReconstructed
 
-A faithful C reconstruction of **Pump It Up: The PREX 4 / EXCEED** (2003), the PC build of the arcade executable (`exceed.exe`).
+A faithful C reconstruction of **Pump It Up: Exceed**, the PC build of the arcade executable (`exceed.exe`).
 
 This project reverse-engineers the original x86 binary and reproduces its gameplay, rendering, audio, and state machine as closely as possible — no emulation, no wrappers. Native executable for Windows and Linux, built with SDL2 + OpenGL.
 

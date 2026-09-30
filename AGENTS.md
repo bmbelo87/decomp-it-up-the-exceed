@@ -458,6 +458,12 @@ Only request information strictly necessary for the current objective. Always ju
 
 ---
 
+## Nomes e Fatos Inventados
+
+**NUNCA** invente nomes de jogos, versões, anos, títulos, telas, funções ou arquivos que não estejam
+no código, no binário, no `AGENTS.md` ou ditos pelo usuário (ex.: chamar o Exceed de "PREX 4").
+Se um nome for necessário e não houver fonte, **pergunte ou avise explicitamente** que é uma sugestão.
+
 ## Resource Mapping
 
 **NUNCA** assuma qual arquivo DAT/BGA/AUD/WAV corresponde a qual tela ou recurso. As numerações nem sempre são óbvias (ex: Song Select é `099.DAT`, não `SELECT.DAT`). Sempre pergunte ao usuário antes de tirar conclusões sobre nomes de arquivos ou mapeamentos de recursos.
