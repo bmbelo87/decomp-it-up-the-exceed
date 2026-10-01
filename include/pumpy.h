@@ -10,6 +10,7 @@
     #endif
     #include <windows.h>
     #include <mmsystem.h>
+    #define Platform_InitCWD() ((void)0)
 #else
     #include "platform_linux.h"
 #endif
@@ -19,8 +20,14 @@
  * layout das structs compartilhadas. */
 typedef void* LPDIRECTSOUND;
 typedef void* LPDIRECTSOUNDBUFFER;
-#include <GL/gl.h>
-#include <GL/glu.h>
+#if defined(__APPLE__)
+    #define GL_SILENCE_DEPRECATION
+    #include <OpenGL/gl.h>
+    #include <OpenGL/glu.h>
+#else
+    #include <GL/gl.h>
+    #include <GL/glu.h>
+#endif
 
 /* O gl.h da Microsoft (opengl32 = GL 1.1) não traz constantes do GL 1.2+. */
 #ifndef GL_CLAMP_TO_EDGE

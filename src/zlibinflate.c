@@ -1,6 +1,6 @@
 #include "zlibinflate.h"
 
-#if defined(__linux__) || defined(_WIN32) /* zlib real (vcpkg) tambem no Windows */
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__) /* zlib real (sistema/vcpkg) */
 
 #include <zlib.h>
 

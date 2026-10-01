@@ -25,12 +25,18 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# macOS: por padrão compila pacote universal (Apple Silicon + Intel)
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Arquiteturas macOS (Universal)" FORCE)
+endif()
+
 # Copia o executável para a pasta do jogo depois de compilar (opcional):
 #   cmake -DPUMPY_GAME_DIR="/caminho/Pump It Up" ..
 set(PUMPY_GAME_DIR "" CACHE PATH "Pasta do jogo: o Pumpy é copiado para lá após o build")
 
 # ---------------------------------------------------------------------------
 # Dependências: SDL2 (janela/entrada/áudio), OpenGL + GLU, zlib.
+#   macOS  : SDL2.framework (third_party/mac ou sistema), OpenGL e zlib do sistema
 #   Linux  : apt install libsdl2-dev libgl-dev libglu1-mesa-dev zlib1g-dev
 #   Windows: vcpkg install sdl2 zlib   (opengl32/glu32 já vêm com o Windows)
 #            cmake -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake ..
@@ -42,26 +48,50 @@ find_package(OpenGL QUIET)
 find_package(ZLIB QUIET)
 
 set(_have_sdl2 FALSE)
-if(TARGET SDL2::SDL2)
-    target_link_libraries(pumpy_deps INTERFACE SDL2::SDL2)
-    set(_have_sdl2 TRUE)
-elseif(TARGET SDL2::SDL2-static)
-    target_link_libraries(pumpy_deps INTERFACE SDL2::SDL2-static)
-    set(_have_sdl2 TRUE)
-elseif(SDL2_FOUND AND SDL2_LIBRARIES)
-    target_include_directories(pumpy_deps INTERFACE ${SDL2_INCLUDE_DIRS})
-    target_link_libraries(pumpy_deps INTERFACE ${SDL2_LIBRARIES})
-    set(_have_sdl2 TRUE)
+if(APPLE)
+    # No macOS procura pelo SDL2.framework universal (em third_party/mac ou sistema)
+    find_library(SDL2_FRAMEWORK NAMES SDL2
+        PATHS
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mac
+            /Library/Frameworks
+            ~/Library/Frameworks
+    )
+    if(SDL2_FRAMEWORK)
+        get_filename_component(SDL2_FRAMEWORK_DIR "${SDL2_FRAMEWORK}" DIRECTORY)
+        target_include_directories(pumpy_deps INTERFACE ${SDL2_FRAMEWORK}/Headers)
+        target_link_libraries(pumpy_deps INTERFACE "-F${SDL2_FRAMEWORK_DIR} -framework SDL2")
+        set(_have_sdl2 TRUE)
+    endif()
+endif()
+
+if(NOT _have_sdl2)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(pumpy_deps INTERFACE SDL2::SDL2)
+        set(_have_sdl2 TRUE)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(pumpy_deps INTERFACE SDL2::SDL2-static)
+        set(_have_sdl2 TRUE)
+    elseif(SDL2_FOUND AND SDL2_LIBRARIES)
+        target_include_directories(pumpy_deps INTERFACE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(pumpy_deps INTERFACE ${SDL2_LIBRARIES})
+        set(_have_sdl2 TRUE)
+    endif()
 endif()
 
 set(_have_gl FALSE)
-if(OpenGL_FOUND AND TARGET OpenGL::GL AND TARGET OpenGL::GLU)
+if(APPLE)
+    target_link_libraries(pumpy_deps INTERFACE "-framework OpenGL")
+    set(_have_gl TRUE)
+elseif(OpenGL_FOUND AND TARGET OpenGL::GL AND TARGET OpenGL::GLU)
     target_link_libraries(pumpy_deps INTERFACE OpenGL::GL OpenGL::GLU)
     set(_have_gl TRUE)
 endif()
 
 set(_have_zlib FALSE)
-if(TARGET ZLIB::ZLIB)
+if(APPLE)
+    target_link_libraries(pumpy_deps INTERFACE "-lz")
+    set(_have_zlib TRUE)
+elseif(TARGET ZLIB::ZLIB)
     target_link_libraries(pumpy_deps INTERFACE ZLIB::ZLIB)
     set(_have_zlib TRUE)
 endif()
@@ -177,8 +207,64 @@ endif()
 
 if(WIN32)
     target_link_libraries(Pumpy PRIVATE winmm)   # timeGetTime / timeBeginPeriod
+elseif(APPLE)
+    target_link_libraries(Pumpy PRIVATE pthread)
 else()
     target_link_libraries(Pumpy PRIVATE m pthread dl)
+endif()
+
+if(APPLE)
+    set_target_properties(Pumpy PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "Pumpy"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.pumpy.game"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${GAME_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${GAME_VERSION}"
+        MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "@executable_path/../Frameworks;@executable_path/Frameworks;@executable_path;/Library/Frameworks"
+    )
+
+    set(PUMPY_ICON_PATH "")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mac/AppIcon.icns")
+        set(PUMPY_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mac/AppIcon.icns")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/AppIcon.icns")
+        set(PUMPY_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/AppIcon.icns")
+    endif()
+
+    if(PUMPY_ICON_PATH)
+        set_source_files_properties("${PUMPY_ICON_PATH}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources")
+        target_sources(Pumpy PRIVATE "${PUMPY_ICON_PATH}")
+    endif()
+
+    if(SDL2_FRAMEWORK)
+        add_custom_command(TARGET Pumpy POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:Pumpy>/../Frameworks
+            COMMAND /usr/bin/ditto "${SDL2_FRAMEWORK}" $<TARGET_FILE_DIR:Pumpy>/../Frameworks/SDL2.framework
+            COMMENT "Embutindo SDL2.framework em Pumpy.app/Contents/Frameworks"
+            VERBATIM)
+    endif()
+
+    add_custom_command(TARGET Pumpy POST_BUILD
+        COMMAND codesign --force --deep --sign - $<TARGET_BUNDLE_DIR:Pumpy>
+        COMMENT "Assinando Pumpy.app (ad-hoc)"
+        VERBATIM)
+
+    # Copia o executável universal para a raiz do build como binário CLI avulso
+    add_custom_command(TARGET Pumpy POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:Pumpy> "${CMAKE_CURRENT_BINARY_DIR}/Pumpy"
+        COMMENT "Disponibilizando executável avulso universal em ${CMAKE_CURRENT_BINARY_DIR}/Pumpy"
+        VERBATIM)
+
+    # Alvo para gerar pacote zip limpo e distribuível para macOS
+    add_custom_target(package_mac
+        COMMAND ${CMAKE_COMMAND} -E tar "cfv" "${CMAKE_CURRENT_BINARY_DIR}/Pumpy-macOS-Universal.zip" --format=zip
+                "Pumpy.app" "Pumpy"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        DEPENDS Pumpy
+        COMMENT "Gerando pacote universal macOS: Pumpy-macOS-Universal.zip"
+        VERBATIM)
 endif()
 
 # Windows: leva a SDL2.dll junto (vcpkg/SDL2 dev com DLL).
@@ -189,10 +275,18 @@ if(WIN32 AND TARGET SDL2::SDL2)
 endif()
 
 if(PUMPY_GAME_DIR)
-    add_custom_command(TARGET Pumpy POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:Pumpy> "${PUMPY_GAME_DIR}"
-        COMMENT "Copiando Pumpy para ${PUMPY_GAME_DIR}"
-        VERBATIM)
+    if(APPLE)
+        add_custom_command(TARGET Pumpy POST_BUILD
+            COMMAND /usr/bin/ditto $<TARGET_BUNDLE_DIR:Pumpy> "${PUMPY_GAME_DIR}/Pumpy.app"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:Pumpy> "${PUMPY_GAME_DIR}/Pumpy"
+            COMMENT "Copiando Pumpy.app e executável para ${PUMPY_GAME_DIR}"
+            VERBATIM)
+    else()
+        add_custom_command(TARGET Pumpy POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:Pumpy> "${PUMPY_GAME_DIR}"
+            COMMENT "Copiando Pumpy para ${PUMPY_GAME_DIR}"
+            VERBATIM)
+    endif()
 endif()
 
 # Assets (BGA, AUDIO, STEP, Stage.cfg, WAVE) são fornecidos pelo usuário com
