@@ -83,10 +83,22 @@ ExceedReconstructed/
 └── CMakeLists.txt
 ```
 
-## Building (Windows and Linux)
+## Building (Windows, Linux, and macOS)
 
-The same source builds on both: window, input and audio use **SDL2**, rendering is
+The same source builds on all three: window, input and audio use **SDL2**, rendering is
 **OpenGL 1.1 + GLU** (immediate mode).
+
+**macOS** (Universal binary: Apple Silicon + Intel)
+
+Detailed guide available at [`docs/MACOS_BUILD.md`](docs/MACOS_BUILD.md).
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target Pumpy --parallel
+
+# To create a distributable clean ZIP package (Pumpy-macOS-Universal.zip):
+cmake --build build --target package_mac
+```
 
 **Linux**
 
