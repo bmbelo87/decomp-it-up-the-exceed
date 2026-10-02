@@ -47,6 +47,7 @@ static bool loadIni(bool all)
         if (sscanf(line, "ServiceTotal=%d",&v) == 1) g_game.svcServiceTotal  = v;
     }
     fclose(f);
+    Input_LoadJoyConfig();
     return true;
 }
 
@@ -67,6 +68,7 @@ void GameOption_Save(void)
         fprintf(f, "TexFilter=%d\n", g_game.gfxTexFilter);
         fprintf(f, "ShowFPS=%d\n", (int)g_game.gfxShowFps);
         fprintf(f, "Aspect=%d\n", g_game.gfxAspect);
+        Input_WriteJoyConfigToIni(f);
         fclose(f);
     }
     Log_Print("GameOption: saved (diff=%d sb=%d help=%d audio=%dms)\n",
