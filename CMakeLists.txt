@@ -154,6 +154,7 @@ add_executable(Pumpy
     src/menu.c
     src/song_select.c
     src/staff.c
+    src/testbga.c
     src/movie.c
     src/intro.c
     src/highscore.c
@@ -185,6 +186,7 @@ add_executable(Pumpy
     src/step.c
     src/song.c
     src/zlibinflate.c
+    # src/xbrz.c        # UPSCALE (xBRZ) das texturas — DESATIVADO (30/09/2026)
     ${PLATFORM_SOURCES}
     # ${WAVE_EMBEDDED_C}   (desativado no Exceed)
 )
@@ -225,12 +227,15 @@ target_link_libraries(Pumpy PRIVATE pumpy_deps mpeg2)
 if(MSVC)
     target_compile_options(Pumpy PRIVATE /W3)
     target_link_options(Pumpy PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    # 4 GB de endereço no Win32 rodando em Windows 64-bit (UPSCALE xBRZ ocupa muita textura)
+    target_link_options(Pumpy PRIVATE /LARGEADDRESSAWARE)
 elseif(WIN32)
     target_link_options(Pumpy PRIVATE -mwindows)
 endif()
 
 if(WIN32)
     target_link_libraries(Pumpy PRIVATE winmm)   # timeGetTime / timeBeginPeriod
+    target_sources(Pumpy PRIVATE src/icon.rc)    # ícone do .exe (src/icon.ico, gerado de icon.png)
 elseif(APPLE)
     target_link_libraries(Pumpy PRIVATE pthread)
 else()

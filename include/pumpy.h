@@ -163,6 +163,7 @@ typedef struct {
     bool inUse;
     uint32_t lastFrame;
     char name[64];
+    int hd;          /* 1 = textura substituída por HD\<NOME>_<CRC>.png; width/height continuam lógicos */
 } Texture;
 
 typedef struct {
@@ -349,6 +350,7 @@ typedef struct {
     int  gfxTexFilter;   /* 0 = SMOOTH (GL_LINEAR), 1 = SHARP (GL_NEAREST) */
     bool gfxShowFps;
     int  gfxAspect;      /* 0 = 4:3 com bordas, 1 = esticar */
+    int  gfxUpscale;     /* 0 = OFF, 2/3/4 = xBRZ ao carregar texturas (xbrz.c) */
     
     InputState input;
     GameplayStats stats;
@@ -429,6 +431,7 @@ typedef struct {
     bool cmdFreedom[2];          /* Freedom ativo por jogador (oculta receptor) */
     bool cmdVanish[2];           /* Vanish ativo por jogador */
     bool cmdNonStep[2];          /* Non-Step ativo por jogador */
+    bool cmdTestBGA[2];          /* Extra do port: starfield (testbga.c) no lugar do BGA */
     int  activePlayerMask; /* 0x1=P1 ativo, 0x2=P2 ativo (ambos=0x3). Default=0x1 */
     bool isBattleMode;    /* true quando BATTLE selecionado (P1+P2, HARD steps em half1 duplicado em half2) */
     bool isVSL;           // true when current song uses 3D VSL instead of BGA
@@ -589,6 +592,9 @@ void BGM_Update(void);   /* por frame: refaz o loop no caminho DirectShow */
 void BGM_Stop(void);
 bool BGM_IsPlaying(void);
 uint32_t BGM_GetPositionMs(void);
+double BGM_ClockAnchorSec(double* nowSec);
+void Gameplay_RefreshClock(void);   /* gameplay.c: relógio das setas no instante do desenho */
+extern bool g_renderTick;           /* bga.c: false no desenho extra entre passos de 60 Hz */
 uint32_t BGM_GetDurationMs(void);
 bool BGM_HasEnded(void);
 bool BGM_IsDSActive(void);
