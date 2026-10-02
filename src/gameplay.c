@@ -89,7 +89,7 @@ static void judgeWindows(int lvl, double bpm, double early[4], double late[4])
  * o life inicial (500) aparece como MEIA barra. Antes o port usava life/500 (barra cheia no início). */
 #define LIFE_BAR_SCALE      0.001f
 /* PUMPY.EXE compara life < 0xB4 (180) nos 4 pontos de desenho da barra (0x411ed2, 0x412102, 0x41223c, 0x41239f) */
-#define LIFE_DANGER         180
+#define LIFE_DANGER         334   /* source oficial DrawGauge: (int)(life/1000*33) <= 10 -> life <= 333 (era 180) */
 /* Substituídos pelas tabelas k_lifeSpeedInit/Min/Max (ver applyLife): no
  * original estes três valores variam por nível de dificuldade, e fixá-los aqui
  * deixava NORMAL e HARD com a curva do EASY.
@@ -537,6 +537,9 @@ static int sprTileCount(int startIdx) {
     return c;
 }
 
+static double g_clkAnchor;          /* relógio do gameplay: âncora congelada */
+static bool   g_clkHave, g_clkLocked;
+
 static bool loadChartForSong(int songId, int diffTier, const char* modeName)
 {
     g_songLoaded = false;
@@ -563,6 +566,7 @@ static bool loadChartForSong(int songId, int diffTier, const char* modeName)
 
     g_chart = &g_playSong.charts[g_chartIdx];
     g_songTime = 0.0;
+    g_clkHave = g_clkLocked = false;
     g_maxSongTime = 0.0;
     g_stagnantFrames = 0;
     g_lastPosMs = 0;
@@ -1575,11 +1579,19 @@ static void processHolds(void)
                 }
                 else
                 {
+                    /* O original julga por LINHA, não por painel (JudgeStep: cada nota
+                     * tratada ganha +128 e a linha só vira JUDGE_END — um julgamento,
+                     * +1 combo — quando todas foram tratadas). Antes só um tap em outro
+                     * painel segurava o julgamento; corpos B/T de outros holds na mesma
+                     * linha não, e 2-3 holds juntos davam +2/+3 por linha — com
+                     * BeatSplit alto o combo disparava. Agora o último painel da linha
+                     * é quem julga; se sobrar hold solto, processMisses dá o MISS. */
                     int hasUnjudgedTap = false;
                     for (int op = 0; op < panCount; op++) {
                         if (op == panel) continue;
                         uint8_t ov = isHD ? getNoteHD(&g_chart->rows[ri], op) : (dnAP ? getDNPanelValue(&g_chart->rows[ri], op) : getPanelValue(&g_chart->rows[ri], op, p));
-                        if (ov && ov != NT_HOLD_B && ov != NT_HOLD_T) { hasUnjudgedTap = true; break; }
+                        /* if (ov && ov != NT_HOLD_B && ov != NT_HOLD_T) { hasUnjudgedTap = true; break; } */
+                        if (ov) { hasUnjudgedTap = true; break; }
                     }
                     if (isHD) clearHDPanel(&g_chart->rows[ri], panel);
                     else if (dnAP) clearDNPanel(&g_chart->rows[ri], panel);
@@ -1696,8 +1708,8 @@ void Gameplay_Start(int songId)
     g_stageBreakFreezeTimer = -1.0f;
     memset(&g_game.stats, 0, sizeof(g_game.stats));
     memset(s_exPrev, 0, sizeof(s_exPrev));
-    g_game.stats.life[0]      = 224; /* baseline visual: 11+2/3 de 26 retangulos ao inicio da musica. */
-    g_game.stats.life[1]      = 224;
+    g_game.stats.life[0]      = LIFE_INITIAL; /* source oficial: m_Gauge = 500 (era 224, ajuste visual) */
+    g_game.stats.life[1]      = LIFE_INITIAL;
     if (g_exceedSongIds) {
         /* exceed.exe 0x4026D6 / 0x4026EE: [player+0x168] = 500 (0x1F4) para
          * cada jogador ativo — o mesmo m_Gauge = 500 do playengine.cpp. */
@@ -1811,6 +1823,19 @@ void Gameplay_Exit(void)
     g_visualRow = NULL;
     g_visualRowCount = 0;
     Log_Print("Gameplay: exit\n");
+}
+
+/* Chamado antes de cada desenho: com a âncora já congelada, põe g_songTime no
+ * instante atual (contador de alta resolução), para a rolagem ficar lisa em
+ * qualquer refresh. Só avança (nunca volta) e não mexe na âncora. */
+void Gameplay_RefreshClock(void)
+{
+    if (g_game.state != STATE_GAMEPLAY || !g_songLoaded || !g_clkLocked) return;
+    if (!BGM_IsDSActive() || g_stageBreakFreezeTimer >= 0.0f) return;
+    double now;
+    if (BGM_ClockAnchorSec(&now) < 0.0) return;
+    double t = (now - g_clkAnchor) - (g_game.audioOffsetMs / 1000.0);
+    if (t > g_songTime) g_songTime = t;
 }
 
 void Gameplay_Update(float dt)
@@ -1959,12 +1984,41 @@ void Gameplay_Update(float dt)
         }
     }
 
+    /* era:
+     *     if (BGM_IsDSActive()) {
+     *         uint32_t posMs = BGM_GetPositionMs();
+     *         if (posMs > 100) // ignore first 100ms (startup)
+     *             g_songTime = posMs / 1000.0 - (g_game.audioOffsetMs / 1000.0); /* offset configuravel em PUMPY.INI (AudioOffset=X ms) * /
+     *         else
+     *             g_songTime += dt;
+     *     } else {
+     *         g_songTime += dt;
+     *     }
+     */
     if (BGM_IsDSActive()) {
-        uint32_t posMs = BGM_GetPositionMs();
-        if (posMs > 100) // ignore first 100ms (startup)
-            g_songTime = posMs / 1000.0 - (g_game.audioOffsetMs / 1000.0); /* offset configuravel em PUMPY.INI (AudioOffset=X ms) */
-        else
+        /* Relógio fixo da NX (sem ajuste de ms durante a música):
+         *   âncora = instante em que a amostra 0 saiu, medida a cada callback.
+         *   Callbacks atrasados dão âncora maior, então no 1º segundo fica a
+         *   MENOR; depois ela congela e g_songTime = agora - âncora, avançando
+         *   pelo contador de alta resolução, sem tremer nem ser corrigido.
+         *   Só reancora num desvio real (> 100 ms: travada do áudio/loop). */
+        double now, anc = BGM_ClockAnchorSec(&now);
+        if (anc >= 0.0) {
+            if (!g_clkLocked) {
+                if (!g_clkHave || anc < g_clkAnchor) g_clkAnchor = anc;
+                g_clkHave = true;
+                if (now - g_clkAnchor >= 1.0) g_clkLocked = true;
+            } else {
+                double d = anc - g_clkAnchor;
+                if (d > 0.1 || d < -0.1) {
+                    Log_Print("GP: relogio reancorado (desvio %.1f ms)\n", d * 1000.0);
+                    g_clkAnchor = anc;
+                }
+            }
+            g_songTime = (now - g_clkAnchor) - (g_game.audioOffsetMs / 1000.0); /* offset configuravel em PUMPY.INI (AudioOffset=X ms) */
+        } else {
             g_songTime += dt;
+        }
     } else {
         g_songTime += dt;
     }
@@ -3577,13 +3631,21 @@ void Gameplay_Render(void)
             {
                 int ht = g_glowTimer[pe][pan];
                 if (ht > 0) {
-                    float ga = (float)ht / 24.0f;
+                    /* exceed.exe 0x406D2D..0x406E66: cor (1,1,1, 1 - t/24) e escala 1 + t/100
+                     * (1.0 -> 1.24) no arrowf e na seta aditiva, uma vez cada. */
+                    /* float ga = (float)ht / 24.0f; */
+                    float ga  = eAlpha;
+                    float gsc = 1.0f + ef / 100.0f;
+                    (void)ht;
 
-                    /* Camada 2: mesma seta aditiva 3x — acumula para ficar bem branca */
+                    /* Camada 2: mesma seta aditiva, uma vez, crescendo */
                     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+                    Sprite_DrawTileUV(aSpr, expPosX[pan] + sw / 2.0f, erY, sw * gsc, sh * gsc, ga);
+                    /* Antes: 3x sem escala (acumulava branco)
                     Sprite_DrawTileUV(aSpr, expPosX[pan] + sw / 2.0f, erY, sw, sh, ga);
                     Sprite_DrawTileUV(aSpr, expPosX[pan] + sw / 2.0f, erY, sw, sh, ga);
                     Sprite_DrawTileUV(aSpr, expPosX[pan] + sw / 2.0f, erY, sw, sh, ga);
+                    */
 
                     /* Camada 3: arrowf.spr aditivo — mesma proporção inicial do HitKey (0.8x), sem crescer.
                      * Posição usa o mesmo offset p1OffX do HitKey (centralizado no receptor). */
@@ -3608,8 +3670,7 @@ void Gameplay_Render(void)
                             const float* afOffX = (isHalfDouble || isDoubleOrNightmare) ? afOffXHD : afOffXReg;
                             int afPan = isDoubleOrNightmare ? (pan % 5) : (isHalfDouble ? arrowType : pan);
                             float cx = expPosX[pan] + afOffX[afPan] + fw / 2.0f;
-                            /* Escala 1.0f — tamanho natural do sprite, sem crescer */
-                            float gsc = 1.0f;
+                            /* Escala 1 + t/100 (gsc acima), centrada — 0x406D6D..0x406DD9 */
                             Sprite_DrawTileUV(fSpr, cx, erY, fw * gsc, fh * gsc, ga);
                         }
                     }

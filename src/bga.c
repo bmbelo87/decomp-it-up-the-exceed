@@ -1,5 +1,8 @@
 #include "pumpy.h"
 
+bool g_renderTick = true;   /* false nos desenhos extras (> 60 Hz): só desenha, não avança */
+
+
 extern int g_menuSelection;
 static int bga_activePic = -1;
 
