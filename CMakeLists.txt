@@ -198,7 +198,31 @@ target_compile_definitions(Pumpy PRIVATE
     SDL_MAIN_HANDLED          # main() próprio, sem SDL2main (ver window.c: SDL_SetMainReady)
 )
 
-target_link_libraries(Pumpy PRIVATE pumpy_deps)
+# libmpeg2 vendorizada (decodificador dos vídeos MOV2 do Exceed)
+add_library(mpeg2 STATIC
+    third_party/libmpeg2/libmpeg2/alloc.c
+    third_party/libmpeg2/libmpeg2/cpu_accel.c
+    third_party/libmpeg2/libmpeg2/cpu_state.c
+    third_party/libmpeg2/libmpeg2/decode.c
+    third_party/libmpeg2/libmpeg2/header.c
+    third_party/libmpeg2/libmpeg2/idct.c
+    third_party/libmpeg2/libmpeg2/motion_comp.c
+    third_party/libmpeg2/libmpeg2/slice.c
+    third_party/libmpeg2/libmpeg2/convert/rgb.c
+)
+target_include_directories(mpeg2 PUBLIC
+    third_party/libmpeg2/include
+)
+target_include_directories(mpeg2 PRIVATE
+    third_party/libmpeg2/libmpeg2
+)
+target_compile_definitions(mpeg2 PRIVATE
+    HAVE_CONFIG_H
+    OPT_GENERIC
+    _CRT_SECURE_NO_WARNINGS
+)
+
+target_link_libraries(Pumpy PRIVATE pumpy_deps mpeg2)
 
 if(MSVC)
     target_compile_options(Pumpy PRIVATE /W3)
@@ -227,7 +251,7 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${GAME_VERSION}"
         MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
         BUILD_WITH_INSTALL_RPATH TRUE
-        INSTALL_RPATH "@executable_path/../Frameworks;@executable_path/Frameworks;@executable_path;/Library/Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks;@executable_path/Frameworks;@executable_path/Pumpy.app/Contents/Frameworks;@executable_path;/Library/Frameworks"
     )
 
     set(PUMPY_ICON_PATH "")
