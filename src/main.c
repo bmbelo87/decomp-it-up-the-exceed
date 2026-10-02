@@ -204,6 +204,7 @@ void Game_Init(HINSTANCE hInstance) {
     g_game.activePlayerMask = 0x1; /* P1 ativo por padrão */
     g_game.isBattleMode = false;   /* BATTLE só ativo quando selecionado no song_select */
     Render_SetGlobalColor(0, 0, 0, 0);
+    Platform_InitCWD();
     GetCurrentDirectoryA(MAX_PATH, g_game.currentDirectory);
     GameOption_Load(); /* lê PUMPY.INI — antes de qualquer sistema, para que o restante já veja os valores corretos */
     InitSystems();
