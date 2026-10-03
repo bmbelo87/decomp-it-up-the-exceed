@@ -77,6 +77,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install dependencies (macOS)
+        run: |
+          brew install sdl2 || true
+
       - name: Configure CMake
         run: |
           cmake -B build -S . \
