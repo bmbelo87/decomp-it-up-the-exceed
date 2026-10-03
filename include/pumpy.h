@@ -350,6 +350,7 @@ typedef struct {
     int  gfxTexFilter;   /* 0 = SMOOTH (GL_LINEAR), 1 = SHARP (GL_NEAREST) */
     bool gfxShowFps;
     int  gfxAspect;      /* 0 = 4:3 com bordas, 1 = esticar */
+    int  gfxLoadTime;    /* 0 = FAST, 1 = ARCADE (3s de espera na tela de título) */
     int  gfxUpscale;     /* 0 = OFF, 2/3/4 = xBRZ ao carregar texturas (xbrz.c) */
     
     InputState input;
@@ -511,6 +512,7 @@ bool Window_ProcessMessages(void);
 void Window_ToggleFullscreen(void);
 void Window_ApplyGraphics(void);
 void Window_GetResolution(int idx, int* w, int* h);
+bool Window_IsFullscreen(void);
 void Window_RequestQuit(void);   /* SDL port: asks the message pump to exit   */
 
 bool Font_Init(void);
@@ -603,6 +605,19 @@ void BGM_Shutdown(void);
 
 bool Input_LoadPumpPad(void);
 void Input_LoadKeyConfig(void); /* lê piukey.cfg (teclas do pad, formato do original); chamado sozinho no 1º uso */
+void Input_SaveKeyConfig(void);
+void Input_LoadJoyConfig(void);
+void Input_SaveJoyConfig(void);
+void Input_WriteJoyConfigToIni(FILE* f);
+uint8_t Input_GetButtonKey(int player, PadButton b);
+void Input_SetButtonKey(int player, PadButton b, uint8_t code);
+void Input_GetButtonKeyName(int player, PadButton b, char* out, size_t outSize);
+void Input_GetButtonJoyName(int player, PadButton b, char* out, size_t outSize);
+void Input_ClearJoyBindings(void);
+void Input_RestoreDefaultConfig(void);
+bool Input_IsListening(void);
+void Input_StartListen(int player, PadButton b);
+void Input_CancelListen(void);
 void Input_Update(void);
 bool Input_IsPadHit(int player, PadButton button);
 bool Input_IsPadDown(int player, PadButton button);

@@ -1148,6 +1148,16 @@ void Gamestate_UpdateSongSelect(float dt) {
                 g_game.selectedDifficulty = mode->difficulties[g_game.selectedSongIndex];
                 selectedState = 0;
                 g_game.isBattleMode = g_isBattleMode; /* propaga flag BATTLE para gameplay */
+                bool isDN = (mode && (strcmp(mode->name, "DOUBLE") == 0 || strcmp(mode->name, "NIGHTMARE") == 0 || strcmp(mode->name, "HALFDOUBLE") == 0));
+                if (isDN) {
+                    int pSrc = (g_game.activePlayerMask == 0x2 || (g_game.cmdSpeedMult[1] > 1 && g_game.cmdSpeedMult[0] == 1)) ? 1 : 0;
+                    g_game.cmdSpeedMult[0] = g_game.cmdSpeedMult[1] = g_game.cmdSpeedMult[pSrc];
+                    g_game.cmdRandomVelocity[0] = g_game.cmdRandomVelocity[1] = g_game.cmdRandomVelocity[pSrc];
+                    g_game.cmdRandomStep[0] = g_game.cmdRandomStep[1] = g_game.cmdRandomStep[pSrc];
+                    g_game.cmdMirror[0] = g_game.cmdMirror[1] = g_game.cmdMirror[pSrc];
+                    g_game.cmdVanish[0] = g_game.cmdVanish[1] = g_game.cmdVanish[pSrc];
+                    g_game.cmdNonStep[0] = g_game.cmdNonStep[1] = g_game.cmdNonStep[pSrc];
+                }
                 Loading_Enter(songId);
             } else {
                 selectedState = 1;
@@ -1180,6 +1190,16 @@ void Gamestate_UpdateSongSelect(float dt) {
             g_game.selectedDifficulty = mode->difficulties[g_game.selectedSongIndex];
             selectedState = 0;
             g_game.isBattleMode = g_isBattleMode;
+            bool isDN = (mode && (strcmp(mode->name, "DOUBLE") == 0 || strcmp(mode->name, "NIGHTMARE") == 0 || strcmp(mode->name, "HALFDOUBLE") == 0));
+            if (isDN) {
+                int pSrc = (g_game.activePlayerMask == 0x2 || (g_game.cmdSpeedMult[1] > 1 && g_game.cmdSpeedMult[0] == 1)) ? 1 : 0;
+                g_game.cmdSpeedMult[0] = g_game.cmdSpeedMult[1] = g_game.cmdSpeedMult[pSrc];
+                g_game.cmdRandomVelocity[0] = g_game.cmdRandomVelocity[1] = g_game.cmdRandomVelocity[pSrc];
+                g_game.cmdRandomStep[0] = g_game.cmdRandomStep[1] = g_game.cmdRandomStep[pSrc];
+                g_game.cmdMirror[0] = g_game.cmdMirror[1] = g_game.cmdMirror[pSrc];
+                g_game.cmdVanish[0] = g_game.cmdVanish[1] = g_game.cmdVanish[pSrc];
+                g_game.cmdNonStep[0] = g_game.cmdNonStep[1] = g_game.cmdNonStep[pSrc];
+            }
             resetTimeCounter();   /* evita disparar de novo antes da troca de estado */
             Loading_Enter(songId);
             return;

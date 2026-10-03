@@ -77,6 +77,7 @@ static const float SVC_PALETTE[7][3] = {
 #define SVC_BIT_CLEAR    0x40000
 #define SVC_BIT_COIN1    0x100000
 #define SVC_BIT_COIN2    0x200000
+#define SVC_BIT_UP       0x800000   /* MOVE UP (port extra) */
 
 /* ---------------------------------------------------------------- estado --
  * Equivalentes dos globais do original:
@@ -87,9 +88,10 @@ static const float SVC_PALETTE[7][3] = {
  *   g_svcAudioIdx  <- DAT_004422d4 (init -1)
  *   g_svcSeIdx     <- DAT_004422d0 (init -1)
  */
-/* GRAPHICS SETTINGS (extra do port): 10 itens no SETUP MENU; página 11. */
-#define SVC_MAIN_COUNT 10
+/* GRAPHICS SETTINGS / BUTTON CONFIG: 11 itens no SETUP MENU; páginas 11 e 12. */
+#define SVC_MAIN_COUNT 11
 #define SVC_PAGE_GRAPHICS 11
+#define SVC_PAGE_BUTTON_CONFIG 12
 static int  g_svcPage;
 static int  g_svcOption;
 static int  g_svcCursor;
@@ -223,12 +225,13 @@ static void svcRenderFooter(void)
     char buf[64];
     svcColor(SVC_NORMAL);
 
-    sprintf(buf, "PUMP IT UP (PREX 3 / %d)", 3);
+    /* sprintf(buf, "PUMP IT UP (PREX 3 / %d)", 3); */
+    sprintf(buf, "DECOMP IT UP (EXCEED)");
     svcText(0.0f, 16.0f, buf);
     svcText(0.0f,  0.0f, "1999-2003 ANDAMIRO CO., LTD.");
 
     switch (g_svcPage) {
-    case 0: case 4: case 5: case 6: case 7: case 10: case SVC_PAGE_GRAPHICS:
+    case 0: case 4: case 5: case 6: case 7: case 10: case SVC_PAGE_GRAPHICS: case SVC_PAGE_BUTTON_CONFIG:
         svcText(236.0f, 36.0f, "MOVE   - TEST    BUTTON");
         svcText(236.0f, 16.0f, "SELECT - SERVICE BUTTON");
         break;
@@ -250,11 +253,10 @@ static void svcRenderFooter(void)
     "SOUND TEST", "BOOKEEPING", "STATISTICS", "EXIT"
 }; */
 /* "BOOKEEPING" com um K só — typo presente no binário original, preservado.
- * "GRAPHICS SETTINGS" é extra deste port (não existe no original): página 11,
- * porque a página 9 é o EXIT. */
+ * "GRAPHICS SETTINGS" (página 11) e "BUTTON CONFIG" (página 12) são extras deste port. */
 static const char* SVC_MAIN_ITEMS[SVC_MAIN_COUNT] = {
     "I/O TEST", "EEPROM TEST", "SCREEN TEST", "GAME OPTION", "COIN OPTION",
-    "SOUND TEST", "BOOKEEPING", "STATISTICS", "GRAPHICS SETTINGS", "EXIT"
+    "SOUND TEST", "BOOKEEPING", "STATISTICS", "GRAPHICS SETTINGS", "BUTTON CONFIG", "EXIT"
 };
 
 static void svcRenderMain(void)
@@ -275,17 +277,21 @@ static void svcRenderMain(void)
         g_svcOption++;
         if (g_svcOption > SVC_MAIN_COUNT - 1) g_svcOption = 0;
     }
+    if (hit & SVC_BIT_UP) {
+        g_svcOption = (g_svcOption <= 0) ? (SVC_MAIN_COUNT - 1) : (g_svcOption - 1);
+    }
     if (hit & SVC_BIT_SERVICE) {
-        /* 0..7 -> páginas 1..8 (original); 8 -> GRAPHICS (11); 9 -> EXIT (9) */
+        /* 0..7 -> páginas 1..8 (original); 8 -> GRAPHICS (11); 9 -> BUTTON CONFIG (12); 10 -> EXIT (9) */
         if (g_svcOption == 8)      g_svcPage = SVC_PAGE_GRAPHICS;
-        else if (g_svcOption == 9) g_svcPage = 9;
+        else if (g_svcOption == 9) g_svcPage = SVC_PAGE_BUTTON_CONFIG;
+        else if (g_svcOption == 10) g_svcPage = 9;
         else                       g_svcPage = g_svcOption + 1;
         g_svcCursor     = 0;
         g_svcEepromDone = 0;
     }
 
     svcColor(SVC_NORMAL);
-    svcText(276.0f, 152.0f, "Lock OK = 0 Err = 0");
+    svcText(276.0f, 125.0f, "Lock OK = 0 Err = 0");
 }
 
 /* -------------------------------------- ServiceMenu_RenderIOTest 0x004054c0 */
@@ -457,6 +463,9 @@ static void svcRenderGameOption(void)
         g_svcCursor++;
         if (g_svcCursor > 8) g_svcCursor = 0;
     }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 8 : (g_svcCursor - 1);
+    }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
         case 0:
@@ -501,15 +510,11 @@ static void svcRenderGameOption(void)
 /* ------------------------------------------ GRAPHICS SETTINGS (extra do port)
  * Mesmo padrão da GAME OPTION: TEST move, SERVICE altera. As mudanças valem na
  * hora (Window_ApplyGraphics); SAVE AND EXIT grava no PUMPY.INI. */
-static const char* SVC_GFX_ITEMS[8] = {
-    "FULLSCREEN", "RESOLUTION", "VSYNC", "TEXTURE FILTER",
-    "SHOW FPS", "ASPECT", "SAVE AND EXIT", "EXIT"
-};
-/* DESATIVADO (30/09/2026): item UPSCALE (XBRZ), entre ASPECT e SAVE AND EXIT.
 static const char* SVC_GFX_ITEMS[9] = {
     "FULLSCREEN", "RESOLUTION", "VSYNC", "TEXTURE FILTER",
-    "SHOW FPS", "ASPECT", "UPSCALE (XBRZ)", "SAVE AND EXIT", "EXIT"
+    "SHOW FPS", "ASPECT", "LOAD TIME", "SAVE AND EXIT", "EXIT"
 };
+/* DESATIVADO (30/09/2026): item UPSCALE (XBRZ)
 static const char* SVC_GFX_UPS[5] = { "OFF", "OFF", "2X", "3X", "4X" };
 */
 static const char* SVC_GFX_RES[5] = { "640x480", "800x600", "1024x768", "1280x960", "1600x1200" };
@@ -522,7 +527,7 @@ static void svcRenderGraphics(void)
     svcColor(SVC_NORMAL);
     svcText(276.0f, 432.0f, "GRAPHICS SETTINGS");
 
-    for (i = 0; i < 8; i++) {   /* era 9 com o UPSCALE */
+    for (i = 0; i < 9; i++) {
         float y = (float)(352 - i * 20);
         svcColorFor(i, g_svcCursor);
         svcText(196.0f, y, SVC_GFX_ITEMS[i]);
@@ -533,14 +538,17 @@ static void svcRenderGraphics(void)
         case 3: svcText(404.0f, y, g_game.gfxTexFilter ? "SHARP" : "SMOOTH"); break;
         case 4: svcText(404.0f, y, g_game.gfxShowFps ? "ON" : "OFF"); break;
         case 5: svcText(404.0f, y, g_game.gfxAspect ? "STRETCH" : "4:3"); break;
-        /* case 6: svcText(404.0f, y, SVC_GFX_UPS[(g_game.gfxUpscale >= 2 && g_game.gfxUpscale <= 4) ? g_game.gfxUpscale : 0]); break; */
+        case 6: svcText(404.0f, y, g_game.gfxLoadTime ? "ARCADE" : "FAST"); break;
         default: break;
         }
     }
 
     if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
-        if (g_svcCursor > 7) g_svcCursor = 0;   /* era 8 com o UPSCALE */
+        if (g_svcCursor > 8) g_svcCursor = 0;
+    }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 8 : (g_svcCursor - 1);
     }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
@@ -550,15 +558,122 @@ static void svcRenderGraphics(void)
         case 3: g_game.gfxTexFilter = !g_game.gfxTexFilter; Window_ApplyGraphics(); break;
         case 4: g_game.gfxShowFps = !g_game.gfxShowFps; break;
         case 5: g_game.gfxAspect = !g_game.gfxAspect; Window_ApplyGraphics(); break;
-        /* case 6: g_game.gfxUpscale = (g_game.gfxUpscale < 2) ? 2 : (g_game.gfxUpscale >= 4 ? 0 : g_game.gfxUpscale + 1); break;
-         * (UPSCALE desativado: SAVE AND EXIT/EXIT voltam a ser 6/7) */
-        case 6:
+        case 6: g_game.gfxLoadTime = !g_game.gfxLoadTime; break;
+        case 7:
             GameOption_Save();
             /* fall-through: SAVE AND EXIT salva e sai, como na GAME OPTION */
-        case 7:
+        case 8:
             g_svcPage = 0;
             break;
         default: break;
+        }
+    }
+}
+
+/* ------------------------------------------- BUTTON CONFIG (extra do port)
+ * Configuração de botões do pad para P1 e P2 (teclado e joysticks/tapetes USB).
+ * MOVE (F1 / DOWN) percorre; SELECT (F2 / ENTER) entra em modo de escuta para
+ * associar nova tecla/botão ou executa a ação selecionada.
+ * SAVE AND EXIT salva piukey.cfg (teclado) e PUMPY.INI (joystick).
+ */
+static void svcRenderButtonConfig(void)
+{
+    uint32_t hit = svcBitsHit();
+    bool listening = Input_IsListening();
+    int i;
+    char buf[128];
+
+    svcColor(SVC_NORMAL);
+    svcText(260.0f, 440.0f, "BUTTON CONFIG");
+
+    if (listening) {
+        svcColor(SVC_HIGHLIGHT);
+        svcText(120.0f, 415.0f, "PRESS ANY KEY OR JOYSTICK BUTTON (ESC: CANCEL)");
+    } else {
+        svcColor(SVC_NORMAL);
+        svcText(140.0f, 415.0f, "SELECT TO BIND KEY/JOY (DOWN: MOVE, ENTER: SELECT)");
+    }
+
+    static const struct { int p; PadButton b; const char* label; } kRows[10] = {
+        { 0, PAD_UL, "P1 7 (UP-LEFT)   " },
+        { 0, PAD_UR, "P1 9 (UP-RIGHT)  " },
+        { 0, PAD_C,  "P1 5 (CENTER)    " },
+        { 0, PAD_DL, "P1 1 (DOWN-LEFT) " },
+        { 0, PAD_DR, "P1 3 (DOWN-RIGHT)" },
+        { 1, PAD_UL, "P2 7 (UP-LEFT)   " },
+        { 1, PAD_UR, "P2 9 (UP-RIGHT)  " },
+        { 1, PAD_C,  "P2 5 (CENTER)    " },
+        { 1, PAD_DL, "P2 1 (DOWN-LEFT) " },
+        { 1, PAD_DR, "P2 3 (DOWN-RIGHT)" },
+    };
+
+    static const char* const kActions[4] = {
+        "CLEAR JOYSTICK BINDS",
+        "RESTORE DEFAULTS",
+        "SAVE AND EXIT",
+        "EXIT"
+    };
+
+    /* Desenha as 10 linhas de botões do pad */
+    for (i = 0; i < 10; i++) {
+        float y = (i < 5) ? (385.0f - (float)i * 20.0f) : (375.0f - (float)i * 20.0f);
+        bool isCurrent = (g_svcCursor == i);
+
+        if (isCurrent && listening) {
+            svcColor(SVC_HIGHLIGHT);
+        } else {
+            svcColorFor(i, g_svcCursor);
+        }
+
+        /* Nome do botão */
+        svcText(120.0f, y, kRows[i].label);
+
+        /* Tecla e Joystick */
+        char keyName[32], joyName[32];
+        Input_GetButtonKeyName(kRows[i].p, kRows[i].b, keyName, sizeof(keyName));
+        Input_GetButtonJoyName(kRows[i].p, kRows[i].b, joyName, sizeof(joyName));
+
+        if (isCurrent && listening) {
+            svcText(310.0f, y, "[PRESS KEY / JOY]");
+        } else {
+            snprintf(buf, sizeof(buf), "KEY: %-10s JOY: %s", keyName, joyName);
+            svcText(310.0f, y, buf);
+        }
+    }
+
+    /* Desenha os 4 itens de ação */
+    for (i = 0; i < 4; i++) {
+        int idx = 10 + i;
+        float y = 165.0f - (float)i * 20.0f;
+        svcColorFor(idx, g_svcCursor);
+        svcText(120.0f, y, kActions[i]);
+    }
+
+    if (!listening) {
+        if (hit & SVC_BIT_TEST) {
+            g_svcCursor++;
+            if (g_svcCursor > 13) g_svcCursor = 0;
+        }
+        if (hit & SVC_BIT_UP) {
+            g_svcCursor = (g_svcCursor <= 0) ? 13 : (g_svcCursor - 1);
+        }
+        if (hit & SVC_BIT_SERVICE) {
+            if (g_svcCursor >= 0 && g_svcCursor < 10) {
+                Input_StartListen(kRows[g_svcCursor].p, kRows[g_svcCursor].b);
+            } else if (g_svcCursor == 10) {
+                Input_ClearJoyBindings();
+            } else if (g_svcCursor == 11) {
+                Input_RestoreDefaultConfig();
+            } else if (g_svcCursor == 12) {
+                Input_SaveKeyConfig();
+                Input_SaveJoyConfig();
+                g_svcPage = 0;
+            } else if (g_svcCursor == 13) {
+                /* Recarrega configurações originais descartando alterações não salvas */
+                Input_LoadKeyConfig();
+                Input_LoadJoyConfig();
+                g_svcPage = 0;
+            }
         }
     }
 }
@@ -601,6 +716,9 @@ static void svcRenderCoinOption(void)
     if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
         if (g_svcCursor > 4) g_svcCursor = 0;
+    }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 4 : (g_svcCursor - 1);
     }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
@@ -665,11 +783,14 @@ static void svcRenderSoundTest(void)
         svcText(372.0f, 332.0f, buf);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         BGM_Stop();
         g_svcCursor++;
         if (g_svcCursor > 2) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        BGM_Stop();
+        g_svcCursor = (g_svcCursor <= 0) ? 2 : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcCursor == 0) {
             int total = g_game.songDB.songCount;
             g_svcAudioIdx++;
@@ -713,10 +834,12 @@ static void svcRenderBookkeeping(void)
         svcText(180.0f, (float)(288 - i * 20), SVC_BOOK_ITEMS[i]);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
         if (g_svcCursor > 1) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 1 : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcCursor == 0) {
             g_svcPage      = 10;
             g_svcSubCursor = 1;   /* começa em NO, como no original */
@@ -744,10 +867,12 @@ static void svcRenderClearBookkeeping(void)
         svcText((float)(228 + i * 96), 312.0f, SVC_YESNO[i]);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         g_svcSubCursor++;
         if (g_svcSubCursor > 1) g_svcSubCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        g_svcSubCursor = (g_svcSubCursor <= 0) ? 1 : (g_svcSubCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcSubCursor == 0) {
             g_game.svcServiceTotal = 0;
             g_game.svcCoin1Total   = 0;
@@ -794,13 +919,18 @@ static void svcRenderStatistics(void)
         y -= 20;
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         int pages = total / 30;
         if (total % 30 != 0) pages++;
         if (pages < 1) pages = 1;
         g_svcCursor++;
         if (g_svcCursor >= pages) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        int pages = total / 30;
+        if (total % 30 != 0) pages++;
+        if (pages < 1) pages = 1;
+        g_svcCursor = (g_svcCursor <= 0) ? (pages - 1) : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         g_svcPage = 0;
     }
 }
@@ -855,16 +985,25 @@ void ServiceMenu_Exit(void)
  */
 void ServiceMenu_Update(void)
 {
+    if (Input_IsListening()) {
+        g_svcHitBits   = 0;
+        g_svcHeldBits  = 0;
+        g_svcSkipInput = 0;
+        return;
+    }
+
     uint32_t hit = 0, held = 0;
 
-    if (Input_IsKeyHit(VK_F1)) hit |= SVC_BIT_TEST;     /* TEST    = MOVE   */
-    if (Input_IsKeyHit(VK_F2)) hit |= SVC_BIT_SERVICE;  /* SERVICE = SELECT */
+    if (Input_IsKeyHit(VK_F1) || Input_IsKeyHit(VK_DOWN))   hit |= SVC_BIT_TEST;     /* TEST    = MOVE   */
+    if (Input_IsKeyHit(VK_UP))                              hit |= SVC_BIT_UP;       /* UP      = MOVE UP */
+    if (Input_IsKeyHit(VK_F2) || Input_IsKeyHit(VK_RETURN)) hit |= SVC_BIT_SERVICE;  /* SERVICE = SELECT */
     if (Input_IsKeyHit(VK_F3)) hit |= SVC_BIT_CLEAR;
     if (Input_IsKeyHit(VK_F4)) hit |= SVC_BIT_COIN1;
     if (Input_IsKeyHit(VK_F5)) hit |= SVC_BIT_COIN2;
 
-    if (Input_IsKeyDown(VK_F1)) held |= SVC_BIT_TEST;
-    if (Input_IsKeyDown(VK_F2)) held |= SVC_BIT_SERVICE;
+    if (Input_IsKeyDown(VK_F1) || Input_IsKeyDown(VK_DOWN))   held |= SVC_BIT_TEST;
+    if (Input_IsKeyDown(VK_UP))                              held |= SVC_BIT_UP;
+    if (Input_IsKeyDown(VK_F2) || Input_IsKeyDown(VK_RETURN)) held |= SVC_BIT_SERVICE;
     if (Input_IsKeyDown(VK_F3)) held |= SVC_BIT_CLEAR;
     if (Input_IsKeyDown(VK_F4)) held |= SVC_BIT_COIN1;
     if (Input_IsKeyDown(VK_F5)) held |= SVC_BIT_COIN2;
@@ -896,7 +1035,8 @@ void ServiceMenu_UpdateRender(void)
     case 8:  svcRenderStatistics();       svcRenderFooter(); break;
     case 9:  ServiceMenu_Exit();          svcRenderFooter(); break;
     case 10: svcRenderClearBookkeeping(); svcRenderFooter(); break;
-    case SVC_PAGE_GRAPHICS: svcRenderGraphics(); svcRenderFooter(); break;
+    case SVC_PAGE_GRAPHICS:      svcRenderGraphics();      svcRenderFooter(); break;
+    case SVC_PAGE_BUTTON_CONFIG: svcRenderButtonConfig();  svcRenderFooter(); break;
     default: svcRenderFooter(); break;
     }
 }

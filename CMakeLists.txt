@@ -58,7 +58,15 @@ if(APPLE)
     )
     if(SDL2_FRAMEWORK)
         get_filename_component(SDL2_FRAMEWORK_DIR "${SDL2_FRAMEWORK}" DIRECTORY)
-        target_include_directories(pumpy_deps INTERFACE ${SDL2_FRAMEWORK}/Headers)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${SDL2_FRAMEWORK}/Headers"
+            "${CMAKE_CURRENT_BINARY_DIR}/include/SDL2"
+        )
+        target_include_directories(pumpy_deps INTERFACE
+            ${SDL2_FRAMEWORK}/Headers
+            ${CMAKE_CURRENT_BINARY_DIR}/include
+        )
         target_link_libraries(pumpy_deps INTERFACE "-F${SDL2_FRAMEWORK_DIR} -framework SDL2")
         set(_have_sdl2 TRUE)
     endif()
@@ -228,14 +236,18 @@ if(MSVC)
     target_compile_options(Pumpy PRIVATE /W3)
     target_link_options(Pumpy PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
     # 4 GB de endereço no Win32 rodando em Windows 64-bit (UPSCALE xBRZ ocupa muita textura)
-    target_link_options(Pumpy PRIVATE /LARGEADDRESSAWARE)
+    # Flags de segurança para conformidade com Windows SmartScreen / Defender (ASLR + DEP)
+    target_link_options(Pumpy PRIVATE /LARGEADDRESSAWARE /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA)
 elseif(WIN32)
-    target_link_options(Pumpy PRIVATE -mwindows)
+    target_link_options(Pumpy PRIVATE -mwindows -Wl,--dynamicbase -Wl,--nxcompat)
 endif()
 
 if(WIN32)
     target_link_libraries(Pumpy PRIVATE winmm)   # timeGetTime / timeBeginPeriod
     target_sources(Pumpy PRIVATE src/icon.rc)    # ícone do .exe (src/icon.ico, gerado de icon.png)
+    if(MSVC)
+        target_sources(Pumpy PRIVATE src/Pumpy.manifest)
+    endif()
 elseif(APPLE)
     target_link_libraries(Pumpy PRIVATE pthread)
 else()

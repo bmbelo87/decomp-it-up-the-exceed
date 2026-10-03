@@ -45,7 +45,7 @@ void * mpeg2_malloc (unsigned size, mpeg2_alloc_t reason)
 	    char * align_buf;
 
 	    align_buf = buf + 63 + sizeof (void **);
-	    align_buf -= (long)align_buf & 63;
+	    align_buf -= (uintptr_t)align_buf & 63;
 	    *(((void **)align_buf) - 1) = buf;
 	    return align_buf;
 	}

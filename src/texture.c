@@ -1,4 +1,5 @@
 #include "pumpy.h"
+#include <ctype.h>
 #include "zlibinflate.h"
 
 #ifndef Z_OK

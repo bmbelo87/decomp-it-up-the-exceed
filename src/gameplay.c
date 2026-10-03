@@ -1,5 +1,6 @@
 #include "pumpy.h"
 #include "vsl.h"
+#include "movie.h"
 
 #ifndef GL_BGR_EXT
 #define GL_BGR_EXT 0x80E0  /* dump de debug; alguns gl.h (Linux) so definem GL_BGR */
@@ -158,6 +159,8 @@ static float g_scrollSpeedTarget[2]; // target por player
 static int   g_rvLastMeasure[2];     // última medida onde RV disparou, por player
 static int   g_ewLastRow[2];         // última row vista pelo Earthworm (DAT_00da24bc)
 static float g_stageBreakFreezeTimer = -1.0f; // >0: travado antes de ir p/ STATE_STAGE_BREAK
+static bool isHDMode(void);
+static bool isDNMode(void);
 
 /* Aplica variação de vida para o julgamento dado (fórmulas exatas do Ghidra). */
 /* Curva de lifeSpeed por nível de dificuldade — GameInit 0x00411381.
@@ -606,7 +609,24 @@ static bool loadChartForSong(int songId, int diffTier, const char* modeName)
         for (int a = 0; a < 10; a++) g_autoPanel[a] = true;
     }
 
-    /* Aplica multiplicador de velocidade do Command — por player. */
+    /* Aplica multiplicador de velocidade do Command — por player.
+     * Em modos double (Nightmare, Freestyle/Double, HalfDouble), sincroniza
+     * modificadores do player ativo (P1 ou P2) para ambos os slots. */
+    bool isDouble = isDNMode() || isHDMode();
+    if (isDouble) {
+        int pSrc = ((g_game.activePlayerMask == 0x2) ||
+                    (g_game.cmdSpeedMult[1] > 1 && g_game.cmdSpeedMult[0] <= 1) ||
+                    (g_game.cmdRandomVelocity[1] && !g_game.cmdRandomVelocity[0])) ? 1 : 0;
+        g_game.cmdSpeedMult[0] = g_game.cmdSpeedMult[1] = g_game.cmdSpeedMult[pSrc];
+        g_game.cmdRandomVelocity[0] = g_game.cmdRandomVelocity[1] = g_game.cmdRandomVelocity[pSrc];
+        g_game.cmdRandomStep[0] = g_game.cmdRandomStep[1] = g_game.cmdRandomStep[pSrc];
+        g_game.cmdMirror[0] = g_game.cmdMirror[1] = g_game.cmdMirror[pSrc];
+        g_game.cmdVanish[0] = g_game.cmdVanish[1] = g_game.cmdVanish[pSrc];
+        g_game.cmdNonStep[0] = g_game.cmdNonStep[1] = g_game.cmdNonStep[pSrc];
+        g_game.cmdFreedom[0] = g_game.cmdFreedom[1] = g_game.cmdFreedom[pSrc];
+        g_game.cmdEarthworm[0] = g_game.cmdEarthworm[1] = g_game.cmdEarthworm[pSrc];
+    }
+
     for (int _ip = 0; _ip < 2; _ip++) {
         float spd = (g_game.cmdSpeedMult[_ip] >= 1) ? (float)g_game.cmdSpeedMult[_ip] : 1.0f;
         g_scrollSpeedX[_ip]      = spd;
@@ -1925,7 +1945,7 @@ void Gameplay_Update(float dt)
 
         for (int _p = 0; _p < 2; _p++)
         {
-            if (!(g_game.activePlayerMask & (1 << _p))) continue;
+            if (!(g_game.activePlayerMask & (1 << _p)) && !(isDNMode() || isHDMode())) continue;
 
             /* RV e Earthworm só trocam a velocidade na virada de compasso (48 rows).
              * Original (PUMPY.EXE 0x4141cc): DAT_00da24b4 % 0x30 == 0 && != DAT_00da24bc.
@@ -1982,13 +2002,21 @@ void Gameplay_Update(float dt)
             else
                 g_scrollSpeedX[_p] = g_scrollSpeedTarget[_p] * blockMul; /* era: g_scrollSpeedTarget[_p] */
         }
+        if (isDNMode() || isHDMode()) {
+            int pSrc = (g_game.activePlayerMask == 0x2) ? 1 : 0;
+            int pDst = 1 - pSrc;
+            g_scrollSpeedTarget[pDst] = g_scrollSpeedTarget[pSrc];
+            g_scrollSpeedX[pDst]      = g_scrollSpeedX[pSrc];
+            g_rvLastMeasure[pDst]     = g_rvLastMeasure[pSrc];
+            g_ewLastRow[pDst]         = g_ewLastRow[pSrc];
+        }
     }
 
     /* era:
      *     if (BGM_IsDSActive()) {
      *         uint32_t posMs = BGM_GetPositionMs();
      *         if (posMs > 100) // ignore first 100ms (startup)
-     *             g_songTime = posMs / 1000.0 - (g_game.audioOffsetMs / 1000.0); /* offset configuravel em PUMPY.INI (AudioOffset=X ms) * /
+     *             g_songTime = posMs / 1000.0 - (g_game.audioOffsetMs / 1000.0); // offset configuravel em PUMPY.INI (AudioOffset=X ms)
      *         else
      *             g_songTime += dt;
      *     } else {
@@ -2037,12 +2065,30 @@ void Gameplay_Update(float dt)
     }
 
     processInput(0);
-    if (g_game.activePlayerMask & 0x2) processInput(1);
+    if ((g_game.activePlayerMask & 0x2) && !isDNMode() && !isHDMode()) processInput(1);
     processPendingRows(0);
-    if (g_game.activePlayerMask & 0x2) processPendingRows(1);
+    if ((g_game.activePlayerMask & 0x2) && !isDNMode() && !isHDMode()) processPendingRows(1);
     processAutoplay();
     processHolds();
     processMisses();
+
+    if (isDNMode() || isHDMode()) {
+        int pDst = (g_game.activePlayerMask == 0x2) ? 1 : 0;
+        int pSrc = 0;
+        if (pDst != pSrc) {
+            g_game.stats.perfectCount[pDst] = g_game.stats.perfectCount[pSrc];
+            g_game.stats.greatCount[pDst]   = g_game.stats.greatCount[pSrc];
+            g_game.stats.goodCount[pDst]    = g_game.stats.goodCount[pSrc];
+            g_game.stats.badCount[pDst]     = g_game.stats.badCount[pSrc];
+            g_game.stats.missCount[pDst]    = g_game.stats.missCount[pSrc];
+            g_game.stats.combo[pDst]        = g_game.stats.combo[pSrc];
+            g_game.stats.maxCombo[pDst]     = g_game.stats.maxCombo[pSrc];
+            g_game.stats.score[pDst]        = g_game.stats.score[pSrc];
+            g_game.stats.life[pDst]         = g_game.stats.life[pSrc];
+            g_game.stats.lifeSpeed[pDst]    = g_game.stats.lifeSpeed[pSrc];
+            g_game.stats.missCombo[pDst]    = g_game.stats.missCombo[pSrc];
+        }
+    }
 
     /* Stage Break: 51 miss consecutivos OU lifebar == 0 (se opção ativa) */
     {
@@ -2170,17 +2216,37 @@ void Gameplay_Update(float dt)
      *   - o chart do jogador ativo acabou: linha atual [0xda24b4] >= total de
      *     linhas [chart+0xd39130]  (aqui: g_songTime >= duracao do chart);
      *   - a musica terminou: 0x4192a0() == 1 (BGM nao esta mais tocando). */
+    /* Chart acabou: esperar o audio e o BGA (video) terminarem antes de ir para o Grade */
+    /*
     if (g_chart && g_totalSongSeconds > 0 && g_songTime >= g_totalSongSeconds) {
         Log_Print("GP: chart ended (%.2f >= %.2f)\n", g_songTime, g_totalSongSeconds);
         BGM_Stop();
         Game_ChangeState(STATE_DANCE_GRADE_ENTER);
         return;
     }
+    */
+    bool chartEnded = (g_chart && g_totalSongSeconds > 0 && g_songTime >= g_totalSongSeconds);
+    if (chartEnded) {
+        bool audioDone = !g_hasAudio || !BGM_IsPlaying();
+        bool movieDone = !Movie_IsOpen() || Movie_HasEnded();
+        bool timeout = (g_songTime >= g_totalSongSeconds + 6.0);
+
+        if ((audioDone && movieDone) || timeout) {
+            Log_Print("GP: chart & song finished (time=%.2f, audioDone=%d, movieDone=%d, timeout=%d)\n",
+                      g_songTime, (int)audioDone, (int)movieDone, (int)timeout);
+            BGM_Stop();
+            Game_ChangeState(STATE_DANCE_GRADE_ENTER);
+            return;
+        }
+    }
     if (g_hasAudio && g_songTime > 1.0 && !BGM_IsPlaying()) {
-        Log_Print("GP: music ended (%.2f)\n", g_songTime);
-        BGM_Stop();
-        Game_ChangeState(STATE_DANCE_GRADE_ENTER);
-        return;
+        bool movieDone = !Movie_IsOpen() || Movie_HasEnded();
+        if (movieDone || (g_totalSongSeconds > 0 && g_songTime >= g_totalSongSeconds + 4.0)) {
+            Log_Print("GP: music & movie ended (%.2f)\n", g_songTime);
+            BGM_Stop();
+            Game_ChangeState(STATE_DANCE_GRADE_ENTER);
+            return;
+        }
     }
 
     // MCI: g_songTime continua avançando (+= dt), verificar por timeout
@@ -3007,7 +3073,8 @@ void Gameplay_Render(void)
         /* Mode/Modifier sprites do ARROW541.SP2 — idêntico ao song_select.
          * P1 → lado esquerdo, P2 → lado direito (usa `p` da iteração atual). */
         if (g_fontArrow541 >= 0) {
-            bool hudRight = (p == 1); /* P2 sempre vai pra direita */
+            bool isDouble = (isDoubleOrNightmare || isHalfDouble);
+            bool hudRight = isDouble ? (g_game.activePlayerMask == 0x2) : (p == 1);
             const char* modeName = (g_game.selectedModeIndex >= 0 && g_game.selectedModeIndex < g_game.songDB.modeCount) ? g_game.songDB.modes[g_game.selectedModeIndex].name : "EASY";
             int modeOff = 31; /* modeez (default) */
             if (strcmp(modeName, "HARD") == 0) modeOff = 32;
@@ -3244,7 +3311,7 @@ void Gameplay_Render(void)
             }
         }  // end judge/combo
 
-        // Pop-up de score (catch effect)
+        /* // Pop-up de score (catch effect) - desativado a pedido do usuario
         for (int i = 0; i < MAX_POPUPS; i++) {
             if (!g_popups[i].active || g_popups[i].player != p) continue;
             char buf[32];
@@ -3256,6 +3323,7 @@ void Gameplay_Render(void)
                 Font_DrawStringCenteredScaled(popCenterX, (int)g_popups[i].y - 16, buf, 1,1,1, g_popups[i].alpha * 0.7f, 0.8f);
             }
         }
+        */
     }  // end for p
 
     // Life bars (03/04/05 ou W03/W04/W05) — renderizadas DEPOIS de todos os players

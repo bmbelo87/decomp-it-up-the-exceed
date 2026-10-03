@@ -575,6 +575,19 @@ static void startGame(void) {
         g_game.cmdSpeedMult[p] = (mm & EXMOD_X8) ? 8 : (mm & EXMOD_X4) ? 4 :
                                  (mm & EXMOD_X3) ? 3 : (mm & EXMOD_X2) ? 2 : 1;
         g_game.cmdRandomVelocity[p] = (mm & EXMOD_RV) != 0;
+        g_game.cmdRandomStep[p] = (mm & EXMOD_R) != 0;
+        g_game.cmdMirror[p] = (mm & EXMOD_M) != 0;
+        g_game.cmdVanish[p] = (mm & EXMOD_V) != 0;
+        g_game.cmdNonStep[p] = (mm & EXMOD_NS) != 0;
+    }
+    if (argIdx == 3 || argIdx == 4) {
+        int pSrc = (((g_joined & 2) && !(g_joined & 1)) || (g_mods[1] != 0 && g_mods[0] == 0)) ? 1 : 0;
+        g_game.cmdSpeedMult[0] = g_game.cmdSpeedMult[1] = g_game.cmdSpeedMult[pSrc];
+        g_game.cmdRandomVelocity[0] = g_game.cmdRandomVelocity[1] = g_game.cmdRandomVelocity[pSrc];
+        g_game.cmdRandomStep[0] = g_game.cmdRandomStep[1] = g_game.cmdRandomStep[pSrc];
+        g_game.cmdMirror[0] = g_game.cmdMirror[1] = g_game.cmdMirror[pSrc];
+        g_game.cmdVanish[0] = g_game.cmdVanish[1] = g_game.cmdVanish[pSrc];
+        g_game.cmdNonStep[0] = g_game.cmdNonStep[1] = g_game.cmdNonStep[pSrc];
     }
     Loading_Enter(id);
 }
