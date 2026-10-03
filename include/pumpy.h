@@ -350,6 +350,7 @@ typedef struct {
     int  gfxTexFilter;   /* 0 = SMOOTH (GL_LINEAR), 1 = SHARP (GL_NEAREST) */
     bool gfxShowFps;
     int  gfxAspect;      /* 0 = 4:3 com bordas, 1 = esticar */
+    int  gfxLoadTime;    /* 0 = FAST, 1 = ARCADE (3s de espera na tela de título) */
     int  gfxUpscale;     /* 0 = OFF, 2/3/4 = xBRZ ao carregar texturas (xbrz.c) */
     
     InputState input;
@@ -511,6 +512,7 @@ bool Window_ProcessMessages(void);
 void Window_ToggleFullscreen(void);
 void Window_ApplyGraphics(void);
 void Window_GetResolution(int idx, int* w, int* h);
+bool Window_IsFullscreen(void);
 void Window_RequestQuit(void);   /* SDL port: asks the message pump to exit   */
 
 bool Font_Init(void);

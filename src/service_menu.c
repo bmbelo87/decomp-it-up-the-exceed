@@ -77,6 +77,7 @@ static const float SVC_PALETTE[7][3] = {
 #define SVC_BIT_CLEAR    0x40000
 #define SVC_BIT_COIN1    0x100000
 #define SVC_BIT_COIN2    0x200000
+#define SVC_BIT_UP       0x800000   /* MOVE UP (port extra) */
 
 /* ---------------------------------------------------------------- estado --
  * Equivalentes dos globais do original:
@@ -224,7 +225,8 @@ static void svcRenderFooter(void)
     char buf[64];
     svcColor(SVC_NORMAL);
 
-    sprintf(buf, "PUMP IT UP (PREX 3 / %d)", 3);
+    /* sprintf(buf, "PUMP IT UP (PREX 3 / %d)", 3); */
+    sprintf(buf, "DECOMP IT UP (EXCEED)");
     svcText(0.0f, 16.0f, buf);
     svcText(0.0f,  0.0f, "1999-2003 ANDAMIRO CO., LTD.");
 
@@ -274,6 +276,9 @@ static void svcRenderMain(void)
     if (hit & SVC_BIT_TEST) {
         g_svcOption++;
         if (g_svcOption > SVC_MAIN_COUNT - 1) g_svcOption = 0;
+    }
+    if (hit & SVC_BIT_UP) {
+        g_svcOption = (g_svcOption <= 0) ? (SVC_MAIN_COUNT - 1) : (g_svcOption - 1);
     }
     if (hit & SVC_BIT_SERVICE) {
         /* 0..7 -> páginas 1..8 (original); 8 -> GRAPHICS (11); 9 -> BUTTON CONFIG (12); 10 -> EXIT (9) */
@@ -458,6 +463,9 @@ static void svcRenderGameOption(void)
         g_svcCursor++;
         if (g_svcCursor > 8) g_svcCursor = 0;
     }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 8 : (g_svcCursor - 1);
+    }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
         case 0:
@@ -502,15 +510,11 @@ static void svcRenderGameOption(void)
 /* ------------------------------------------ GRAPHICS SETTINGS (extra do port)
  * Mesmo padrão da GAME OPTION: TEST move, SERVICE altera. As mudanças valem na
  * hora (Window_ApplyGraphics); SAVE AND EXIT grava no PUMPY.INI. */
-static const char* SVC_GFX_ITEMS[8] = {
-    "FULLSCREEN", "RESOLUTION", "VSYNC", "TEXTURE FILTER",
-    "SHOW FPS", "ASPECT", "SAVE AND EXIT", "EXIT"
-};
-/* DESATIVADO (30/09/2026): item UPSCALE (XBRZ), entre ASPECT e SAVE AND EXIT.
 static const char* SVC_GFX_ITEMS[9] = {
     "FULLSCREEN", "RESOLUTION", "VSYNC", "TEXTURE FILTER",
-    "SHOW FPS", "ASPECT", "UPSCALE (XBRZ)", "SAVE AND EXIT", "EXIT"
+    "SHOW FPS", "ASPECT", "LOAD TIME", "SAVE AND EXIT", "EXIT"
 };
+/* DESATIVADO (30/09/2026): item UPSCALE (XBRZ)
 static const char* SVC_GFX_UPS[5] = { "OFF", "OFF", "2X", "3X", "4X" };
 */
 static const char* SVC_GFX_RES[5] = { "640x480", "800x600", "1024x768", "1280x960", "1600x1200" };
@@ -523,7 +527,7 @@ static void svcRenderGraphics(void)
     svcColor(SVC_NORMAL);
     svcText(276.0f, 432.0f, "GRAPHICS SETTINGS");
 
-    for (i = 0; i < 8; i++) {   /* era 9 com o UPSCALE */
+    for (i = 0; i < 9; i++) {
         float y = (float)(352 - i * 20);
         svcColorFor(i, g_svcCursor);
         svcText(196.0f, y, SVC_GFX_ITEMS[i]);
@@ -534,14 +538,17 @@ static void svcRenderGraphics(void)
         case 3: svcText(404.0f, y, g_game.gfxTexFilter ? "SHARP" : "SMOOTH"); break;
         case 4: svcText(404.0f, y, g_game.gfxShowFps ? "ON" : "OFF"); break;
         case 5: svcText(404.0f, y, g_game.gfxAspect ? "STRETCH" : "4:3"); break;
-        /* case 6: svcText(404.0f, y, SVC_GFX_UPS[(g_game.gfxUpscale >= 2 && g_game.gfxUpscale <= 4) ? g_game.gfxUpscale : 0]); break; */
+        case 6: svcText(404.0f, y, g_game.gfxLoadTime ? "ARCADE" : "FAST"); break;
         default: break;
         }
     }
 
     if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
-        if (g_svcCursor > 7) g_svcCursor = 0;   /* era 8 com o UPSCALE */
+        if (g_svcCursor > 8) g_svcCursor = 0;
+    }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 8 : (g_svcCursor - 1);
     }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
@@ -551,12 +558,11 @@ static void svcRenderGraphics(void)
         case 3: g_game.gfxTexFilter = !g_game.gfxTexFilter; Window_ApplyGraphics(); break;
         case 4: g_game.gfxShowFps = !g_game.gfxShowFps; break;
         case 5: g_game.gfxAspect = !g_game.gfxAspect; Window_ApplyGraphics(); break;
-        /* case 6: g_game.gfxUpscale = (g_game.gfxUpscale < 2) ? 2 : (g_game.gfxUpscale >= 4 ? 0 : g_game.gfxUpscale + 1); break;
-         * (UPSCALE desativado: SAVE AND EXIT/EXIT voltam a ser 6/7) */
-        case 6:
+        case 6: g_game.gfxLoadTime = !g_game.gfxLoadTime; break;
+        case 7:
             GameOption_Save();
             /* fall-through: SAVE AND EXIT salva e sai, como na GAME OPTION */
-        case 7:
+        case 8:
             g_svcPage = 0;
             break;
         default: break;
@@ -648,6 +654,9 @@ static void svcRenderButtonConfig(void)
             g_svcCursor++;
             if (g_svcCursor > 13) g_svcCursor = 0;
         }
+        if (hit & SVC_BIT_UP) {
+            g_svcCursor = (g_svcCursor <= 0) ? 13 : (g_svcCursor - 1);
+        }
         if (hit & SVC_BIT_SERVICE) {
             if (g_svcCursor >= 0 && g_svcCursor < 10) {
                 Input_StartListen(kRows[g_svcCursor].p, kRows[g_svcCursor].b);
@@ -707,6 +716,9 @@ static void svcRenderCoinOption(void)
     if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
         if (g_svcCursor > 4) g_svcCursor = 0;
+    }
+    if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 4 : (g_svcCursor - 1);
     }
     if (hit & SVC_BIT_SERVICE) {
         switch (g_svcCursor) {
@@ -771,11 +783,14 @@ static void svcRenderSoundTest(void)
         svcText(372.0f, 332.0f, buf);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         BGM_Stop();
         g_svcCursor++;
         if (g_svcCursor > 2) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        BGM_Stop();
+        g_svcCursor = (g_svcCursor <= 0) ? 2 : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcCursor == 0) {
             int total = g_game.songDB.songCount;
             g_svcAudioIdx++;
@@ -819,10 +834,12 @@ static void svcRenderBookkeeping(void)
         svcText(180.0f, (float)(288 - i * 20), SVC_BOOK_ITEMS[i]);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         g_svcCursor++;
         if (g_svcCursor > 1) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        g_svcCursor = (g_svcCursor <= 0) ? 1 : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcCursor == 0) {
             g_svcPage      = 10;
             g_svcSubCursor = 1;   /* começa em NO, como no original */
@@ -850,10 +867,12 @@ static void svcRenderClearBookkeeping(void)
         svcText((float)(228 + i * 96), 312.0f, SVC_YESNO[i]);
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         g_svcSubCursor++;
         if (g_svcSubCursor > 1) g_svcSubCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        g_svcSubCursor = (g_svcSubCursor <= 0) ? 1 : (g_svcSubCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         if (g_svcSubCursor == 0) {
             g_game.svcServiceTotal = 0;
             g_game.svcCoin1Total   = 0;
@@ -900,13 +919,18 @@ static void svcRenderStatistics(void)
         y -= 20;
     }
 
-    if (hit == SVC_BIT_TEST) {
+    if (hit & SVC_BIT_TEST) {
         int pages = total / 30;
         if (total % 30 != 0) pages++;
         if (pages < 1) pages = 1;
         g_svcCursor++;
         if (g_svcCursor >= pages) g_svcCursor = 0;
-    } else if (hit == SVC_BIT_SERVICE) {
+    } else if (hit & SVC_BIT_UP) {
+        int pages = total / 30;
+        if (total % 30 != 0) pages++;
+        if (pages < 1) pages = 1;
+        g_svcCursor = (g_svcCursor <= 0) ? (pages - 1) : (g_svcCursor - 1);
+    } else if (hit & SVC_BIT_SERVICE) {
         g_svcPage = 0;
     }
 }
@@ -971,12 +995,14 @@ void ServiceMenu_Update(void)
     uint32_t hit = 0, held = 0;
 
     if (Input_IsKeyHit(VK_F1) || Input_IsKeyHit(VK_DOWN))   hit |= SVC_BIT_TEST;     /* TEST    = MOVE   */
+    if (Input_IsKeyHit(VK_UP))                              hit |= SVC_BIT_UP;       /* UP      = MOVE UP */
     if (Input_IsKeyHit(VK_F2) || Input_IsKeyHit(VK_RETURN)) hit |= SVC_BIT_SERVICE;  /* SERVICE = SELECT */
     if (Input_IsKeyHit(VK_F3)) hit |= SVC_BIT_CLEAR;
     if (Input_IsKeyHit(VK_F4)) hit |= SVC_BIT_COIN1;
     if (Input_IsKeyHit(VK_F5)) hit |= SVC_BIT_COIN2;
 
     if (Input_IsKeyDown(VK_F1) || Input_IsKeyDown(VK_DOWN))   held |= SVC_BIT_TEST;
+    if (Input_IsKeyDown(VK_UP))                              held |= SVC_BIT_UP;
     if (Input_IsKeyDown(VK_F2) || Input_IsKeyDown(VK_RETURN)) held |= SVC_BIT_SERVICE;
     if (Input_IsKeyDown(VK_F3)) held |= SVC_BIT_CLEAR;
     if (Input_IsKeyDown(VK_F4)) held |= SVC_BIT_COIN1;

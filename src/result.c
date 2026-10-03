@@ -351,6 +351,10 @@ void Result_Enter(void) {
     g_game.bgaLoop = false;
     g_game.bgaFrame = 0;
 
+    /* Limpa entradas anteriores para evitar pular a tela de score imediatamente */
+    memset(g_game.input.padState, 0, sizeof(g_game.input.padState));
+    memset(g_game.input.padPrevState, 0, sizeof(g_game.input.padPrevState));
+
     Font_LoadTexture();   /* já grava no g_fontTexId global */
 
     BGM_Stop();
@@ -396,6 +400,21 @@ void Result_Update(float dt) {
         }
         if (g_game.state != STATE_DANCE_GRADE_DISPLAY) return;
         exGradeSounds(g_exT);
+
+        /* Permite avançar com CENTER (ou Enter/Espaço), mas APENAS após pelo menos 1 segundo (60 quadros) */
+        if (g_exT >= 60) {
+            bool hitAdvance = Input_IsKeyHit(VK_RETURN) || Input_IsKeyHit(VK_SPACE) ||
+                              Input_IsPadHit(0, PAD_C) || Input_IsPadHit(1, PAD_C);
+            if (hitAdvance) {
+                Log_Print("RESULT(EX): manual advance by player at frame %d\n", g_exT);
+                GameState ns = Result_GetNextState();
+                BGM_Stop();
+                Resource_ClearBGA();
+                Game_ChangeState(ns);
+                return;
+            }
+        }
+
         if (g_exT > 0x168) {                     /* 0x40D0E7 */
             GameState ns = Result_GetNextState();
             BGM_Stop();
@@ -425,8 +444,9 @@ void Result_Update(float dt) {
         Game_ChangeState(ns);
         return;
     }
-    if (Input_IsKeyHit(VK_ESCAPE) || Input_IsKeyHit(VK_RETURN) ||
-        Input_IsKeyHit(VK_SPACE) || Input_IsKeyHit(VK_F1)) {
+    if (g_resultFrame >= 60 && (Input_IsKeyHit(VK_ESCAPE) || Input_IsKeyHit(VK_RETURN) ||
+        Input_IsKeyHit(VK_SPACE) || Input_IsKeyHit(VK_F1) ||
+        Input_IsPadHit(0, PAD_C) || Input_IsPadHit(1, PAD_C))) {
         Log_Print("RESULT: manual exit at f=%d bgaCount=%d\n", g_resultFrame, g_game.bgaPicCount);
         BGM_Stop();
         Resource_ClearBGA();

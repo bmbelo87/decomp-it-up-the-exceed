@@ -19,7 +19,8 @@ static uint32_t g_loadingStartMs = 0;
 
 void Loading_Enter(int songId) {
     g_loadingSongId = songId;
-    g_loadingTimer = LOADING_DURATION_MS;
+    /* ARCADE: espera 3 segundos na tela de titulo com o banner da musica; FAST: 500ms */
+    g_loadingTimer = (g_game.gfxLoadTime == 1) ? 3000 : 500;
     g_loadingStartMs = timeGetTime();
     g_pnzTexId = -1;
 
@@ -104,9 +105,12 @@ void Loading_Update(float dt) {
             g_game.state = STATE_GAMEPLAY;
             Gameplay_Start(g_loadingSongId);
 
-            /* Espera ativa como no original (0x4116b5): nada é desenhado. */
+            /* Espera ativa como no original (0x4116b5): substituída pelo tempo
+             * visual configurado no título (ARCADE 3s / FAST) para não congelar em tela preta. */
+            /*
             while (timeGetTime() - g_loadingStartMs < LOADING_MIN_TO_MUSIC_MS)
                 Sleep(1);
+            */
 
             if (useMov) {
                 Log_Print("Loading: loading MOV '%s'\n", movPath);
